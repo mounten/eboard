@@ -1,0 +1,256 @@
+//! The run loop: no winit. Builds `RawInput`, runs egui, paints, presents, then sleeps in
+//! `poll()` until a page flip completes, a repaint is requested or a repaint deadline passes.
+//! Platforms without vblank events (linuxfb) are paced with [`Platform::frame_interval`].
+
+use std::os::fd::{AsFd as _, OwnedFd};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use rustix::event::{EventfdFlags, PollFd, PollFlags};
+
+use crate::platform::Platform;
+use crate::render::Renderer;
+use crate::{App, Error, Frame, signals};
+
+/// Wakes the run loop from any thread (egui repaint requests) and carries the earliest requested
+/// repaint time.
+struct RepaintSignal {
+    deadline: Mutex<Option<Instant>>,
+    eventfd: OwnedFd,
+}
+
+impl RepaintSignal {
+    fn new() -> Result<Self, Error> {
+        let eventfd = rustix::event::eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)
+            .map_err(std::io::Error::from)?;
+        Ok(Self {
+            deadline: Mutex::new(None),
+            eventfd,
+        })
+    }
+
+    fn request(&self, delay: Duration) {
+        let Some(at) = Instant::now().checked_add(delay) else {
+            return; // "never"
+        };
+        {
+            let mut deadline = self.deadline.lock().unwrap_or_else(|e| e.into_inner());
+            *deadline = Some(deadline.map_or(at, |d| d.min(at)));
+        }
+        let _ = rustix::io::write(&self.eventfd, &1u64.to_ne_bytes());
+    }
+
+    fn take_deadline(&self) -> Option<Instant> {
+        self.deadline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
+
+    fn drain(&self) {
+        let mut buf = [0u8; 8];
+        let _ = rustix::io::read(&self.eventfd, &mut buf);
+    }
+}
+
+pub(crate) struct Runner<'a, P: Platform> {
+    pub platform: &'a mut P,
+    pub renderer: &'a mut P::Renderer,
+    pub egui_ctx: egui::Context,
+    pub frame: Frame,
+    /// Size egui lays out for, in pixels (after rotation).
+    pub size_px: [u32; 2],
+    pub native_pixels_per_point: f32,
+    pub handle_signals: bool,
+}
+
+impl<P: Platform> Runner<'_, P> {
+    /// Runs until the app closes or SIGINT/SIGTERM arrives. Calls [`App::on_exit`] before
+    /// returning, while the display and GL context are still up.
+    pub(crate) fn run(mut self, app: &mut dyn App) -> Result<(), Error> {
+        let signal = Arc::new(RepaintSignal::new()?);
+        {
+            let signal = signal.clone();
+            self.egui_ctx.set_request_repaint_callback(move |info| {
+                if info.viewport_id == egui::ViewportId::ROOT {
+                    signal.request(info.delay);
+                }
+            });
+        }
+        let _signal_guard = if self.handle_signals {
+            Some(signals::install(signal.eventfd.as_fd())?)
+        } else {
+            None
+        };
+
+        let result = self.event_loop(app, &signal);
+        app.on_exit();
+        self.egui_ctx.set_request_repaint_callback(|_| {});
+        result
+    }
+
+    fn event_loop(&mut self, app: &mut dyn App, signal: &RepaintSignal) -> Result<(), Error> {
+        let start = Instant::now();
+        let mut next_repaint = Some(start);
+        // Earliest start of the next frame on platforms paced by a frame interval.
+        let mut earliest_frame: Option<Instant> = None;
+
+        loop {
+            if self.handle_signals && signals::quit_requested() {
+                log::info!("Signal received, exiting");
+                return Ok(());
+            }
+
+            if let Some(requested) = signal.take_deadline() {
+                next_repaint = Some(next_repaint.map_or(requested, |t| t.min(requested)));
+            }
+
+            let now = Instant::now();
+            let ready_at = match (next_repaint, earliest_frame) {
+                (Some(t), Some(earliest)) => Some(t.max(earliest)),
+                (t, _) => t,
+            };
+            let due = ready_at.is_some_and(|t| t <= now);
+            if due && self.platform.can_render() {
+                earliest_frame = self
+                    .platform
+                    .frame_interval()
+                    .and_then(|i| now.checked_add(i));
+                let (repaint_delay, close) = self.frame(app, start)?;
+                next_repaint = Instant::now().checked_add(repaint_delay);
+                if close {
+                    log::info!("App requested close");
+                    return Ok(());
+                }
+                continue;
+            }
+
+            // Sleep until the pending page flip completes (a frame is due but cannot be rendered
+            // yet) or until the next repaint. With nothing to do, block indefinitely: idle CPU
+            // stays at zero.
+            let timeout = if due {
+                if self.platform.event_fd().is_some() {
+                    None
+                } else {
+                    Some(Duration::from_millis(1))
+                }
+            } else {
+                ready_at.map(|t| t.saturating_duration_since(now))
+            };
+            self.wait(signal, timeout)?;
+        }
+    }
+
+    fn wait(&mut self, signal: &RepaintSignal, timeout: Option<Duration>) -> Result<(), Error> {
+        let timeout = timeout.map(|d| {
+            rustix::time::Timespec::try_from(d).unwrap_or(rustix::time::Timespec {
+                tv_sec: i64::MAX,
+                tv_nsec: 0,
+            })
+        });
+        let (platform_ready, wake_ready) = {
+            let mut fds = Vec::with_capacity(2);
+            fds.push(PollFd::new(&signal.eventfd, PollFlags::IN));
+            if let Some(fd) = self.platform.event_fd() {
+                fds.push(PollFd::from_borrowed_fd(fd, PollFlags::IN));
+            }
+            match rustix::event::poll(&mut fds, timeout.as_ref()) {
+                Ok(_) | Err(rustix::io::Errno::INTR) => {}
+                Err(e) => return Err(std::io::Error::from(e).into()),
+            }
+            let ready = |fd: &PollFd<'_>| !fd.revents().is_empty();
+            (fds.get(1).is_some_and(ready), ready(&fds[0]))
+        };
+        if wake_ready {
+            signal.drain();
+        }
+        if platform_ready {
+            self.platform.dispatch_events()?;
+        }
+        Ok(())
+    }
+
+    /// Runs one egui pass, paints and presents. Returns egui's repaint delay and whether the app
+    /// asked to close.
+    fn frame(&mut self, app: &mut dyn App, start: Instant) -> Result<(Duration, bool), Error> {
+        let frame_start = Instant::now();
+
+        let mut raw_input = self.raw_input(start);
+        app.raw_input_hook(&self.egui_ctx, &mut raw_input);
+
+        let frame = &mut self.frame;
+        let full_output = self.egui_ctx.run_pass(raw_input, |ctx| {
+            app.logic(ctx, frame);
+            ctx.root_ui(|ui| app.ui(ui, frame));
+        });
+
+        let egui::FullOutput {
+            platform_output: _,
+            mut textures_delta,
+            shapes,
+            pixels_per_point,
+            viewport_output,
+        } = full_output;
+
+        let mut close = std::mem::take(&mut self.frame.close_requested);
+        let mut repaint_delay = Duration::MAX;
+        if let Some(output) = viewport_output.get(&egui::ViewportId::ROOT) {
+            repaint_delay = output.repaint_delay;
+            for command in &output.commands {
+                match command {
+                    egui::ViewportCommand::Close => close = true,
+                    other => log::trace!("Ignoring viewport command {other:?}"),
+                }
+            }
+        }
+
+        let primitives = self.egui_ctx.tessellate(shapes, pixels_per_point);
+        let clear_color = app.clear_color(&self.egui_ctx.global_style().visuals);
+        self.renderer.paint(
+            self.size_px,
+            pixels_per_point,
+            clear_color,
+            &primitives,
+            &mut textures_delta,
+        );
+        self.frame.cpu_usage = Some(frame_start.elapsed().as_secs_f32());
+
+        self.platform.present(self.renderer)?;
+        Ok((repaint_delay, close))
+    }
+
+    fn raw_input(&self, start: Instant) -> egui::RawInput {
+        let native_ppp = self.native_pixels_per_point;
+        let pixels_per_point = native_ppp * self.egui_ctx.zoom_factor();
+        let [w, h] = self.size_px;
+        let screen_rect = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(w as f32, h as f32) / pixels_per_point,
+        );
+
+        let mut viewports = egui::ViewportIdMap::default();
+        viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                native_pixels_per_point: Some(native_ppp),
+                monitor_size: Some(screen_rect.size()),
+                inner_rect: Some(screen_rect),
+                outer_rect: Some(screen_rect),
+                focused: Some(true),
+                fullscreen: Some(true),
+                ..Default::default()
+            },
+        );
+
+        egui::RawInput {
+            viewport_id: egui::ViewportId::ROOT,
+            viewports,
+            screen_rect: Some(screen_rect),
+            max_texture_side: Some(self.renderer.max_texture_side()),
+            time: Some(start.elapsed().as_secs_f64()),
+            predicted_dt: 1.0 / self.platform.refresh_hz().max(1.0),
+            focused: true,
+            ..Default::default()
+        }
+    }
+}

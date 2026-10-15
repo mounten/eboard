@@ -2,6 +2,7 @@
 #
 #   cross build --release --target aarch64-unknown-linux-gnu --example hello      # Pi 5, Jetson, i.MX8
 #   cross build --release --target armv7-unknown-linux-gnueabihf --example hello  # i.MX6, 32-bit Pi OS
+#   cross build --release --target x86_64-unknown-linux-gnu --example hello       # Intel/AMD boards
 #
 # Only libgbm is linked at build time (gbm-sys). libEGL and libGLESv2 are loaded with dlopen at
 # runtime, so the board's vendor EGL (Mesa, NVIDIA, Vivante, ...) is used and not needed here.
@@ -14,3 +15,6 @@ dockerfile = { file = "docker/Dockerfile.cross-focal", build-args = { DEB_ARCH =
 
 [target.armv7-unknown-linux-gnueabihf]
 dockerfile = { file = "docker/Dockerfile.cross-focal", build-args = { DEB_ARCH = "armhf", GNU_TRIPLE = "arm-linux-gnueabihf" } }
+
+[target.x86_64-unknown-linux-gnu]
+dockerfile = { file = "docker/Dockerfile.cross-focal", build-args = { DEB_ARCH = "amd64", GNU_TRIPLE = "x86_64-linux-gnu" } }

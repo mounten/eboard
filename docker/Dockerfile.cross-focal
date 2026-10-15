@@ -5,31 +5,17 @@
 # for current Rust build scripts (`0.2.5`: Ubuntu 16.04).
 #
 # Build args (set per target in Cross.toml):
-#   DEB_ARCH    Debian architecture (arm64, armhf)
-#   GNU_TRIPLE  GCC triple (aarch64-linux-gnu, arm-linux-gnueabihf)
+#   DEB_ARCH    Debian architecture (arm64, armhf, amd64)
+#   GNU_TRIPLE  GCC triple (aarch64-linux-gnu, arm-linux-gnueabihf, x86_64-linux-gnu)
 FROM ubuntu:20.04
 
 ARG DEB_ARCH
 ARG GNU_TRIPLE
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Foreign-arch packages live on ports.ubuntu.com; keep the default mirrors for amd64 only.
-RUN sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list \
- && for suite in focal focal-updates focal-security; do \
-      echo "deb [arch=${DEB_ARCH}] http://ports.ubuntu.com/ubuntu-ports ${suite} main universe" \
-        >> /etc/apt/sources.list; \
-    done \
- && dpkg --add-architecture "${DEB_ARCH}" \
- && apt-get update \
- && apt-get install --assume-yes --no-install-recommends \
-      ca-certificates \
-      gcc \
-      libc6-dev \
-      pkg-config \
-      "gcc-${GNU_TRIPLE}" \
-      "libc6-dev-${DEB_ARCH}-cross" \
-      "libgbm-dev:${DEB_ARCH}" \
- && rm -rf /var/lib/apt/lists/*
+# amd64 builds natively. Foreign-arch packages live on ports.ubuntu.com; the default mirrors are
+# kept for amd64 only.
+RUN set -eux;     if [ "${DEB_ARCH}" = amd64 ]; then       packages="libgbm-dev";     else       sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list;       for suite in focal focal-updates focal-security; do         echo "deb [arch=${DEB_ARCH}] http://ports.ubuntu.com/ubuntu-ports ${suite} main universe"           >> /etc/apt/sources.list;       done;       dpkg --add-architecture "${DEB_ARCH}";       packages="gcc-${GNU_TRIPLE} libc6-dev-${DEB_ARCH}-cross libgbm-dev:${DEB_ARCH}";     fi;     apt-get update;     apt-get install --assume-yes --no-install-recommends ca-certificates gcc libc6-dev pkg-config ${packages};     rm -rf /var/lib/apt/lists/*
 
 # Only the variables of the target being built take effect.
 ENV PKG_CONFIG_ALLOW_CROSS=1

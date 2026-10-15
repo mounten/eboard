@@ -1,0 +1,25 @@
+[workspace]
+# The changelog is built from Conventional Commits (see CONTRIBUTING.md).
+changelog_update = true
+git_release_enable = true
+git_tag_name = "v{{ version }}"
+# Only release when a release PR was merged, not on every push with an unpublished version.
+release_always = false
+semver_check = true
+
+[[package]]
+name = "eboard"
+changelog_path = "CHANGELOG.md"
+
+[changelog]
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^revert", group = "Reverted" },
+    { message = "^chore\(release\)", skip = true },
+    { message = "^(chore|ci|test|style|build)", skip = true },
+]
+protect_breaking_commits = true

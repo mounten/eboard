@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: aarch64-unknown-linux-gnu, armv7-unknown-linux-gnueabihf
+      - uses: Swatinem/rust-cache@v2
+      # The `kms` feature links libgbm (test binaries need it; EGL/GLES are loaded at runtime).
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libgbm-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets
+      - run: cargo clippy --all-targets --target aarch64-unknown-linux-gnu
+      - run: cargo clippy --all-targets --target armv7-unknown-linux-gnueabihf
+      # Feature combinations: framebuffer only (i.MX6 BSPs), KMS only, nothing.
+      - run: cargo clippy --all-targets --target armv7-unknown-linux-gnueabihf --no-default-features --features linuxfb,input-evdev
+      - run: cargo clippy --all-targets --no-default-features --features kms
+      - run: cargo clippy --all-targets --no-default-features
+      - run: cargo test
+      - run: cargo doc --no-deps
+
+  # The crate itself is Linux-only at runtime, but it has to keep building on development hosts.
+  host:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  boards:
+    uses: ./.github/workflows/boards.yml
+
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      # PRs are squash-merged, so the title becomes the commit message on main.
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,90 @@
+name: Board builds
+
+# Cross-compiles the `hello` example for the board targets with the image in `docker/`
+# (Ubuntu 20.04, glibc 2.31). Used by CI (artifacts) and by releases (attached to the release).
+
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: Upload the binaries to this GitHub release instead of as workflow artifacts.
+        type: string
+        default: ""
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Raspberry Pi 4/5 (64-bit), NVIDIA Jetson, i.MX8
+          - name: aarch64
+            target: aarch64-unknown-linux-gnu
+            features: ""
+          # 32-bit ARM with KMS/GBM (e.g. i.MX6 with etnaviv, 32-bit Raspberry Pi OS)
+          - name: armv7
+            target: armv7-unknown-linux-gnueabihf
+            features: ""
+          # 32-bit ARM without libgbm (e.g. i.MX6 BSPs with the Vivante fbdev driver)
+          - name: armv7-linuxfb
+            target: armv7-unknown-linux-gnueabihf
+            features: --no-default-features --features linuxfb,input-evdev
+            no-gbm: true
+          # Intel/AMD boards and industrial PCs
+          - name: x86_64
+            target: x86_64-unknown-linux-gnu
+            features: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Build
+        run: cross build --release --locked --target ${{ matrix.target }} --example hello ${{ matrix.features }}
+
+      - name: Check glibc version and linked libraries
+        env:
+          BIN: target/${{ matrix.target }}/release/examples/hello
+          NO_GBM: ${{ matrix.no-gbm }}
+        run: |
+          # Boards with older BSPs (JetPack 5, Pi OS Bullseye, Yocto) ship glibc 2.31.
+          max=$(readelf -V "$BIN" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "Highest glibc symbol version: $max"
+          if [ "$(printf '%s\n' "$max" GLIBC_2.31 | sort -V | tail -1)" != GLIBC_2.31 ]; then
+            echo "::error::hello needs $max, but boards may only have glibc 2.31"
+            exit 1
+          fi
+          needed=$(readelf -d "$BIN" | grep NEEDED)
+          echo "$needed"
+          if [ "$NO_GBM" = true ] && echo "$needed" | grep -q libgbm; then
+            echo "::error::this build must not link libgbm"
+            exit 1
+          fi
+
+      - name: Package
+        run: tar -czf eboard-hello-${{ matrix.name }}.tar.gz -C target/${{ matrix.target }}/release/examples hello
+
+      - if: inputs.release-tag == ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: eboard-hello-${{ matrix.name }}
+          path: eboard-hello-${{ matrix.name }}.tar.gz
+
+      - if: inputs.release-tag != ''
+        name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release-tag }}
+        run: gh release upload "$TAG" eboard-hello-${{ matrix.name }}.tar.gz --clobber

@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # Publishes to crates.io, tags and creates the GitHub release after a release PR was merged.
+  release:
+    if: github.repository_owner == 'mounten'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      releases_created: ${{ steps.release-plz.outputs.releases_created }}
+      releases: ${{ steps.release-plz.outputs.releases }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        id: release-plz
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Attaches the `hello` example for every board target to the new GitHub release.
+  binaries:
+    needs: release
+    if: needs.release.outputs.releases_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/boards.yml
+    with:
+      release-tag: ${{ fromJSON(needs.release.outputs.releases)[0].tag }}
+
+  # Opens or updates the release PR, which bumps the version and updates CHANGELOG.md.
+  release-pr:
+    if: github.repository_owner == 'mounten'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # PRs opened with `GITHUB_TOKEN` don't trigger CI, which the ruleset on `main` requires.
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

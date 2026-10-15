@@ -51,6 +51,8 @@
 mod app;
 mod error;
 mod geometry;
+#[cfg(feature = "input-evdev")]
+mod input;
 mod options;
 mod platform;
 mod render;
@@ -67,8 +69,8 @@ pub use egui_glow::glow;
 
 pub use app::{App, CreationContext, Frame, ScreenInfo};
 pub use error::Error;
-pub use geometry::{Rotation, pixels_per_point_from_size};
-pub use options::{Backend, ModeRequest, Options, OutputConfig};
+pub use geometry::{Rotation, TouchTransform, pixels_per_point_from_size};
+pub use options::{Backend, InputGrab, InputOptions, ModeRequest, Options, OutputConfig};
 
 /// Error type app creators may return.
 pub type DynError = Box<dyn std::error::Error + Send + Sync>;
@@ -199,6 +201,8 @@ mod backends {
             gl,
         };
         let result = runner::Runner {
+            #[cfg(feature = "input-evdev")]
+            input: input::Input::new(options, panel_size),
             platform: &mut platform,
             renderer: &mut renderer,
             egui_ctx,

@@ -107,6 +107,50 @@ impl FromStr for Rotation {
     }
 }
 
+/// Corrects a touch controller whose axes don't match the panel, before the display rotation is
+/// applied. Like Qt's `QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS` (`swapxy`, `invertx`, `inverty`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TouchTransform {
+    pub swap_xy: bool,
+    pub invert_x: bool,
+    pub invert_y: bool,
+}
+
+impl TouchTransform {
+    /// Applies the transform to normalized (0..=1) touch coordinates. Swapping happens first.
+    #[cfg_attr(not(feature = "input-evdev"), allow(dead_code))]
+    pub(crate) fn apply(self, [mut u, mut v]: [f32; 2]) -> [f32; 2] {
+        if self.swap_xy {
+            std::mem::swap(&mut u, &mut v);
+        }
+        if self.invert_x {
+            u = 1.0 - u;
+        }
+        if self.invert_y {
+            v = 1.0 - v;
+        }
+        [u, v]
+    }
+}
+
+impl FromStr for TouchTransform {
+    type Err = String;
+
+    /// Comma-separated flags: `swapxy`, `invx`/`invertx`, `invy`/`inverty`. Empty = identity.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut t = Self::default();
+        for flag in s.split(',').map(str::trim).filter(|f| !f.is_empty()) {
+            match flag.to_ascii_lowercase().as_str() {
+                "swapxy" => t.swap_xy = true,
+                "invx" | "invertx" => t.invert_x = true,
+                "invy" | "inverty" => t.invert_y = true,
+                other => return Err(format!("unknown touch transform flag {other:?}")),
+            }
+        }
+        Ok(t)
+    }
+}
+
 /// Texture coordinates (GL convention: origin bottom-left) for the four corners of a full-screen
 /// quad, so that sampling an FBO holding the logical (unrotated) egui image shows it rotated on the
 /// panel.
@@ -300,6 +344,23 @@ mod tests {
         assert_eq!(pixels_per_point_from_size([720, 1280], None), 1.0);
         assert_eq!(pixels_per_point_from_size([1920, 1080], Some([16, 9])), 1.0);
         assert_eq!(pixels_per_point_from_size([1920, 1080], Some([0, 0])), 1.0);
+    }
+
+    #[test]
+    fn touch_transform() {
+        let t: TouchTransform = "swapxy, invx".parse().unwrap();
+        assert_eq!(
+            t,
+            TouchTransform {
+                swap_xy: true,
+                invert_x: true,
+                invert_y: false
+            }
+        );
+        // Swap first, then invert the (new) x.
+        assert_eq!(t.apply([0.25, 0.75]), [0.25, 0.25]);
+        assert_eq!("".parse::<TouchTransform>(), Ok(TouchTransform::default()));
+        assert!("mirror".parse::<TouchTransform>().is_err());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::{Error, Rotation, geometry::parse_size};
+use crate::{Error, Rotation, TouchTransform, geometry::parse_size};
 
 /// Display backend. Like `QT_QPA_EGLFS_INTEGRATION`, it can be overridden with
 /// `EGUI_EMBED_BACKEND`.
@@ -27,6 +27,35 @@ impl FromStr for Backend {
             "linuxfb" | "fb" | "fbdev" => Ok(Self::LinuxFb),
             other => Err(format!(
                 "unknown backend {other:?} (expected auto, kms or linuxfb)"
+            )),
+        }
+    }
+}
+
+/// Which input devices to open exclusively (`EVIOCGRAB`). Grabbed devices deliver events only to
+/// this app: nothing reaches the text console (e.g. a login prompt) or other programs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputGrab {
+    /// Share all devices.
+    None,
+    /// Grab keyboards, so typing doesn't also go to the console. Ctrl+C on such a keyboard then
+    /// no longer stops the app (use SSH, systemd or an exit button).
+    #[default]
+    Keyboards,
+    /// Grab every device we use.
+    All,
+}
+
+impl FromStr for InputGrab {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" | "0" | "off" | "false" => Ok(Self::None),
+            "keyboards" | "keyboard" => Ok(Self::Keyboards),
+            "all" | "1" | "on" | "true" => Ok(Self::All),
+            other => Err(format!(
+                "unknown grab mode {other:?} (expected none, keyboards or all)"
             )),
         }
     }
@@ -177,6 +206,40 @@ pub struct Options {
     /// Install SIGINT/SIGTERM handlers that exit the run loop cleanly (restoring the display and
     /// calling [`crate::App::on_exit`]).
     pub handle_signals: bool,
+
+    /// Touch, mouse and keyboard (feature `input-evdev`).
+    pub input: InputOptions,
+}
+
+/// Input devices from `/dev/input/event*` (feature `input-evdev`). Touchscreens, mice and
+/// keyboards are detected automatically, including ones plugged in later.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputOptions {
+    /// Read input devices at all. Env: `EGUI_EMBED_INPUT` (`0`/`1`).
+    pub enabled: bool,
+
+    /// Which devices to open exclusively. Env: `EGUI_EMBED_INPUT_GRAB` (`none`, `keyboards`,
+    /// `all`).
+    pub grab: InputGrab,
+
+    /// Fix touch controllers whose axes don't match the panel (applied before
+    /// [`OutputConfig::rotation`], which touch follows automatically).
+    /// Env: `EGUI_EMBED_TOUCH_TRANSFORM` (`swapxy,invx,invy`).
+    pub touch_transform: TouchTransform,
+
+    /// Draw a mouse cursor when a mouse is used (there is no compositor to draw one).
+    pub show_cursor: bool,
+}
+
+impl Default for InputOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            grab: InputGrab::Keyboards,
+            touch_transform: TouchTransform::default(),
+            show_cursor: true,
+        }
+    }
 }
 
 impl Default for Options {
@@ -190,6 +253,7 @@ impl Default for Options {
             #[cfg(feature = "glow")]
             shader_version: None,
             handle_signals: true,
+            input: InputOptions::default(),
         }
     }
 }
@@ -208,6 +272,14 @@ impl Options {
             value
                 .parse()
                 .map_err(|e| Error::Config(format!("{key}={value:?}: {e}")))
+        }
+
+        fn parse_bool(key: &str, value: &str) -> Result<bool, Error> {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "on" | "yes" => Ok(true),
+                "0" | "false" | "off" | "no" => Ok(false),
+                _ => Err(Error::Config(format!("{key}={value:?}: expected 0 or 1"))),
+            }
         }
 
         let var = |key: &str| var(key).filter(|v| !v.trim().is_empty());
@@ -246,15 +318,16 @@ impl Options {
             self.output.pixels_per_point = Some(ppp);
         }
         if let Some(v) = var("EGUI_EMBED_VSYNC") {
-            self.vsync = match v.trim() {
-                "1" | "true" | "on" | "yes" => true,
-                "0" | "false" | "off" | "no" => false,
-                _ => {
-                    return Err(Error::Config(format!(
-                        "EGUI_EMBED_VSYNC={v:?}: expected 0 or 1"
-                    )));
-                }
-            };
+            self.vsync = parse_bool("EGUI_EMBED_VSYNC", &v)?;
+        }
+        if let Some(v) = var("EGUI_EMBED_INPUT") {
+            self.input.enabled = parse_bool("EGUI_EMBED_INPUT", &v)?;
+        }
+        if let Some(v) = var("EGUI_EMBED_INPUT_GRAB") {
+            self.input.grab = parse("EGUI_EMBED_INPUT_GRAB", &v)?;
+        }
+        if let Some(v) = var("EGUI_EMBED_TOUCH_TRANSFORM") {
+            self.input.touch_transform = parse("EGUI_EMBED_TOUCH_TRANSFORM", &v)?;
         }
         Ok(())
     }
@@ -292,6 +365,8 @@ mod tests {
             ("EGUI_EMBED_PHYSICAL_SIZE", "88x155"),
             ("EGUI_EMBED_PPP", "1.5"),
             ("EGUI_EMBED_VSYNC", "0"),
+            ("EGUI_EMBED_INPUT_GRAB", "all"),
+            ("EGUI_EMBED_TOUCH_TRANSFORM", "invy"),
         ])
         .unwrap();
         assert_eq!(o.backend, Backend::Kms);
@@ -310,6 +385,9 @@ mod tests {
         assert_eq!(o.output.physical_size_mm, Some([88, 155]));
         assert_eq!(o.output.pixels_per_point, Some(1.5));
         assert!(!o.vsync);
+        assert!(o.input.enabled);
+        assert_eq!(o.input.grab, InputGrab::All);
+        assert!(o.input.touch_transform.invert_y);
     }
 
     #[test]

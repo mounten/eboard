@@ -20,8 +20,8 @@ fn main() {
 }
 ```
 
-Status: early. Rendering works; **input (touch, mouse, keyboard) is not implemented yet**.
-Tested on a Raspberry Pi 5 with the Touch Display 2.
+Status: early, but usable: rendering plus touch, mouse and keyboard input. Tested on a
+Raspberry Pi 5 with the Touch Display 2.
 
 ## Backends
 
@@ -29,6 +29,8 @@ Tested on a Raspberry Pi 5 with the Touch Display 2.
 |---|---|---|---|
 | `kms` | `kms` (default) | OpenGL ES 2/3 (`egui_glow`) via DRM/KMS + GBM + EGL | Mesa GPUs (Raspberry Pi, i.MX8 etnaviv, ...), NVIDIA Jetson (NVGBM) |
 | `linuxfb` | `linuxfb` (default) | CPU (built-in software rasterizer) | `/dev/fbN` without GPU/KMS drivers, e.g. i.MX6 BSPs |
+
+Input is the separate `input-evdev` feature (default).
 
 The backend is picked at runtime. `auto` (default) tries `kms` first, then `linuxfb`.
 
@@ -38,6 +40,21 @@ The backend is picked at runtime. `auto` (default) tries `kms` first, then `linu
   matters on SoCs where the GPU and the display controller are separate devices.
 - `linuxfb` copies only the changed area to the framebuffer and supports 16/24/32 bpp formats.
 - SIGINT/SIGTERM exit cleanly: `App::on_exit` is called and the display/console is restored.
+
+## Input
+
+With the `input-evdev` feature (default), touchscreens, mice and keyboards are read from
+`/dev/input/event*` directly (no libinput needed). Devices plugged in later are picked up
+automatically.
+
+- **Touch**: multi-touch (protocol B) and single-touch panels. egui gets touch events, and the first
+  finger also acts as the mouse pointer, so all widgets work by tapping. Touch follows
+  `rotation`; for touch controllers mounted differently from the panel use `touch_transform`.
+- **Mouse**: motion, buttons, wheel. A cursor is drawn by egui-embed (there is no compositor).
+- **Keyboard**: US layout (other layouts are planned via xkbcommon). Ctrl+C/X/V work inside the
+  app with an internal clipboard.
+- Keyboards are grabbed by default (`EVIOCGRAB`), so typing doesn't also go to the text console
+  behind the app (e.g. a login prompt). Ctrl+C on that keyboard then doesn't stop the app.
 
 ## Options
 
@@ -59,6 +76,10 @@ variable, so a deployed binary can be reconfigured without rebuilding.
 | `dithering` | – | `false` | Dithering in the GL shader (`kms` only, default on) |
 | `shader_version` | – | | Force a GLSL version (`kms` only) |
 | `handle_signals` | – | `false` | Install SIGINT/SIGTERM handlers (default on) |
+| `input.enabled` | `EGUI_EMBED_INPUT` | `0` | Read input devices (default on) |
+| `input.grab` | `EGUI_EMBED_INPUT_GRAB` | `none`, `keyboards`, `all` | Exclusive access (default `keyboards`) |
+| `input.touch_transform` | `EGUI_EMBED_TOUCH_TRANSFORM` | `swapxy,invx,invy` | Fix touch axes that don't match the panel |
+| `input.show_cursor` | – | `false` | Draw a mouse cursor while a mouse is used (default on) |
 
 Rotation: `90` turns a native portrait panel (e.g. 720×1280) into a landscape UI (1280×720).
 `kms` lets the display controller do 180° if it can and does everything else on the GPU; `linuxfb`
@@ -81,26 +102,28 @@ cross build --release --target aarch64-unknown-linux-gnu --example hello
 # 32-bit ARM
 cross build --release --target armv7-unknown-linux-gnueabihf --example hello
 # Boards without libgbm (e.g. i.MX6 with the Vivante fbdev BSP): framebuffer only
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features linuxfb
+cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features linuxfb,input-evdev
 ```
 
 ## Running
 
 - Nothing else may own the display: stop the desktop / display manager
   (`sudo systemctl isolate multi-user.target`) and run from the console or over SSH.
-- The user needs the `video` group (`/dev/dri/card*`, `/dev/fb*`) and `render` for the GPU.
+- The user needs the `video` group (`/dev/dri/card*`, `/dev/fb*`), `render` for the GPU and
+  `input` for `/dev/input/event*`.
 - With `linuxfb`, the console is switched to graphics mode so its text and cursor don't draw over
   the UI. That needs root, or the app running on the console itself (e.g. a systemd service with
   `TTYPath=`).
 
 ```sh
-RUST_LOG=info ./hello                              # animated demo; Ctrl+C to quit
+RUST_LOG=info ./hello                              # interactive demo; Quit button or Ctrl+C
+RUST_LOG=info ./hello --animate                    # repaint every frame
 EGUI_EMBED_ROTATION=90 RUST_LOG=info ./hello
 EGUI_EMBED_BACKEND=linuxfb RUST_LOG=info ./hello
 ```
 
 ## Roadmap
 
-- Input: touch, mouse and keyboard via evdev/libinput (next)
+- Keyboard layouts via xkbcommon, touchpads, hardware cursor
 - `viv-fb`: Vivante GPU on fbdev for i.MX6 BSPs (like Qt's `eglfs_viv`)
 - wgpu + Vulkan `VK_KHR_display`, EGLDevice for old Jetson releases, multiple outputs

@@ -62,6 +62,8 @@ pub(crate) struct Runner<'a, P: Platform> {
     pub size_px: [u32; 2],
     pub native_pixels_per_point: f32,
     pub handle_signals: bool,
+    #[cfg(feature = "input-evdev")]
+    pub input: Option<crate::input::Input>,
 }
 
 impl<P: Platform> Runner<'_, P> {
@@ -137,29 +139,52 @@ impl<P: Platform> Runner<'_, P> {
             } else {
                 ready_at.map(|t| t.saturating_duration_since(now))
             };
-            self.wait(signal, timeout)?;
+            if self.wait(signal, timeout)? {
+                // Input: repaint right away (still paced by vsync / the frame interval).
+                let now = Instant::now();
+                next_repaint = Some(next_repaint.map_or(now, |t| t.min(now)));
+            }
         }
     }
 
-    fn wait(&mut self, signal: &RepaintSignal, timeout: Option<Duration>) -> Result<(), Error> {
+    /// egui's current points-to-pixels factor.
+    fn pixels_per_point(&self) -> f32 {
+        self.native_pixels_per_point * self.egui_ctx.zoom_factor()
+    }
+
+    /// Blocks until something happens or `timeout` passes. Returns true if input arrived.
+    fn wait(&mut self, signal: &RepaintSignal, timeout: Option<Duration>) -> Result<bool, Error> {
         let timeout = timeout.map(|d| {
             rustix::time::Timespec::try_from(d).unwrap_or(rustix::time::Timespec {
                 tv_sec: i64::MAX,
                 tv_nsec: 0,
             })
         });
-        let (platform_ready, wake_ready) = {
-            let mut fds = Vec::with_capacity(2);
-            fds.push(PollFd::new(&signal.eventfd, PollFlags::IN));
-            if let Some(fd) = self.platform.event_fd() {
-                fds.push(PollFd::from_borrowed_fd(fd, PollFlags::IN));
+        let (wake_ready, platform_ready, input_ready) = {
+            // Order: eventfd, platform fd (if any), input fds.
+            let mut fds = vec![PollFd::new(&signal.eventfd, PollFlags::IN)];
+            let platform_fd = self.platform.event_fd();
+            let has_platform_fd = platform_fd.is_some();
+            fds.extend(platform_fd.map(|fd| PollFd::from_borrowed_fd(fd, PollFlags::IN)));
+            #[cfg(feature = "input-evdev")]
+            if let Some(input) = &self.input {
+                fds.extend(
+                    input
+                        .fds()
+                        .map(|fd| PollFd::from_borrowed_fd(fd, PollFlags::IN)),
+                );
             }
             match rustix::event::poll(&mut fds, timeout.as_ref()) {
                 Ok(_) | Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(std::io::Error::from(e).into()),
             }
             let ready = |fd: &PollFd<'_>| !fd.revents().is_empty();
-            (fds.get(1).is_some_and(ready), ready(&fds[0]))
+            let input_start = 1 + usize::from(has_platform_fd);
+            (
+                ready(&fds[0]),
+                has_platform_fd && ready(&fds[1]),
+                fds[input_start..].iter().any(ready),
+            )
         };
         if wake_ready {
             signal.drain();
@@ -167,7 +192,16 @@ impl<P: Platform> Runner<'_, P> {
         if platform_ready {
             self.platform.dispatch_events()?;
         }
-        Ok(())
+        #[cfg(feature = "input-evdev")]
+        if input_ready {
+            let pixels_per_point = self.pixels_per_point();
+            if let Some(input) = &mut self.input {
+                return Ok(input.dispatch(pixels_per_point));
+            }
+        }
+        #[cfg(not(feature = "input-evdev"))]
+        let _ = input_ready;
+        Ok(false)
     }
 
     /// Runs one egui pass, paints and presents. Returns egui's repaint delay and whether the app
@@ -179,18 +213,31 @@ impl<P: Platform> Runner<'_, P> {
         app.raw_input_hook(&self.egui_ctx, &mut raw_input);
 
         let frame = &mut self.frame;
+        #[cfg(feature = "input-evdev")]
+        let input = &self.input;
         let full_output = self.egui_ctx.run_pass(raw_input, |ctx| {
             app.logic(ctx, frame);
             ctx.root_ui(|ui| app.ui(ui, frame));
+            #[cfg(feature = "input-evdev")]
+            if let Some(input) = input {
+                input.paint_cursor(ctx);
+            }
         });
 
         let egui::FullOutput {
-            platform_output: _,
+            platform_output,
             mut textures_delta,
             shapes,
             pixels_per_point,
             viewport_output,
         } = full_output;
+
+        #[cfg(feature = "input-evdev")]
+        if let Some(input) = &mut self.input {
+            input.handle_output(&platform_output);
+        }
+        #[cfg(not(feature = "input-evdev"))]
+        let _ = platform_output;
 
         let mut close = std::mem::take(&mut self.frame.close_requested);
         let mut repaint_delay = Duration::MAX;
@@ -219,9 +266,9 @@ impl<P: Platform> Runner<'_, P> {
         Ok((repaint_delay, close))
     }
 
-    fn raw_input(&self, start: Instant) -> egui::RawInput {
+    fn raw_input(&mut self, start: Instant) -> egui::RawInput {
         let native_ppp = self.native_pixels_per_point;
-        let pixels_per_point = native_ppp * self.egui_ctx.zoom_factor();
+        let pixels_per_point = self.pixels_per_point();
         let [w, h] = self.size_px;
         let screen_rect = egui::Rect::from_min_size(
             egui::Pos2::ZERO,
@@ -242,7 +289,8 @@ impl<P: Platform> Runner<'_, P> {
             },
         );
 
-        egui::RawInput {
+        #[cfg_attr(not(feature = "input-evdev"), expect(unused_mut))]
+        let mut raw_input = egui::RawInput {
             viewport_id: egui::ViewportId::ROOT,
             viewports,
             screen_rect: Some(screen_rect),
@@ -251,6 +299,12 @@ impl<P: Platform> Runner<'_, P> {
             predicted_dt: 1.0 / self.platform.refresh_hz().max(1.0),
             focused: true,
             ..Default::default()
+        };
+        #[cfg(feature = "input-evdev")]
+        if let Some(input) = &mut self.input {
+            // Modifier state reaches egui as `ModifiersChanged` events.
+            raw_input.events = input.take_events();
         }
+        raw_input
     }
 }

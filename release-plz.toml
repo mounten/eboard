@@ -19,7 +19,7 @@ commit_parsers = [
     { message = "^refactor", group = "Changed" },
     { message = "^docs", group = "Documentation" },
     { message = "^revert", group = "Reverted" },
-    { message = "^chore\(release\)", skip = true },
+    { message = "^chore\\(release\\)", skip = true },
     { message = "^(chore|ci|test|style|build)", skip = true },
 ]
 protect_breaking_commits = true

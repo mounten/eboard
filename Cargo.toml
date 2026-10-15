@@ -1,0 +1,42 @@
+[package]
+name = "egui-embed"
+version = "0.1.0"
+edition = "2024"
+description = "Run egui apps full-screen on embedded Linux without a compositor (KMS/DRM + GBM + EGL), like Qt's eglfs"
+keywords = ["egui", "embedded", "kms", "drm", "egl"]
+categories = ["gui", "embedded"]
+
+[features]
+default = ["kms", "linuxfb"]
+
+## OpenGL ES 2.0/3.x renderer (egui_glow).
+glow = ["dep:egui_glow"]
+
+## CPU renderer (no GPU needed).
+soft = []
+
+## DRM/KMS + GBM + EGL display backend (Mesa, NVIDIA Jetson NVGBM, i.MX8 Vivante/etnaviv, ...).
+kms = ["glow", "dep:drm", "dep:gbm", "dep:khronos-egl", "dep:libloading"]
+
+## Linux framebuffer (/dev/fbN) backend with the CPU renderer, like Qt's linuxfb. Needs no GPU
+## driver and links no native libraries, e.g. for i.MX6 BSPs without KMS/GBM.
+linuxfb = ["soft"]
+
+[dependencies]
+egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
+egui_glow = { version = "0.37", default-features = false, optional = true }
+log = "0.4"
+thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Must match the drm version used by `gbm`.
+drm = { version = "0.14", optional = true }
+gbm = { version = "0.18", default-features = false, features = ["drm-support"], optional = true }
+khronos-egl = { version = "6.0", default-features = false, features = ["1_5", "dynamic"], optional = true }
+libloading = { version = "0.8", optional = true }
+libc = "0.2"
+rustix = { version = "1", features = ["event", "fs", "time"] }
+
+[dev-dependencies]
+env_logger = "0.11"
+

@@ -1,0 +1,2 @@
+# Container build files are used inside Linux images.
+docker/** text eol=lf

@@ -19,6 +19,34 @@
 //! eboard::run(eboard::Options::default(), |_cc| Ok(Box::new(Hello))).unwrap();
 //! ```
 //!
+//! # Fonts
+//!
+//! The `default_fonts` feature (on by default) bundles egui's fonts. An app that ships its own
+//! fonts can turn it off and install them when it is created:
+//!
+//! ```no_run
+//! # struct MyApp;
+//! # impl eboard::App for MyApp {
+//! #     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eboard::Frame) {}
+//! # }
+//! use std::sync::Arc;
+//!
+//! eboard::run(eboard::Options::default(), |cc| {
+//!     let mut fonts = egui::FontDefinitions::empty();
+//!     let font = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")?;
+//!     fonts.font_data.insert("DejaVuSans".into(), Arc::new(egui::FontData::from_owned(font)));
+//!     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+//!         fonts.families.insert(family, vec!["DejaVuSans".into()]);
+//!     }
+//!     cc.egui_ctx.set_fonts(fonts);
+//!     Ok(Box::new(MyApp))
+//! })
+//! .unwrap();
+//! ```
+//!
+//! Without any fonts, egui draws boxes instead of text. Cargo features are additive: if another
+//! dependency enables `egui/default_fonts`, the fonts are bundled anyway.
+//!
 //! # Configuration
 //!
 //! [`Options`] can be overridden at runtime with environment variables, like Qt's

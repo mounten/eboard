@@ -16,7 +16,11 @@ categories = ["gui", "embedded"]
 targets = ["x86_64-unknown-linux-gnu"]
 
 [features]
-default = ["kms", "linuxfb", "input-evdev"]
+default = ["kms", "linuxfb", "input-evdev", "default_fonts"]
+
+## Bundle egui's default fonts (`egui/default_fonts`, about 1 MB). Turn it off if the app installs
+## its own fonts with `egui::Context::set_fonts`; without any fonts egui draws boxes for text.
+default_fonts = ["egui/default_fonts"]
 
 ## OpenGL ES 2.0/3.x renderer (egui_glow).
 glow = ["dep:egui_glow"]
@@ -35,7 +39,7 @@ linuxfb = ["soft"]
 input-evdev = ["dep:evdev"]
 
 [dependencies]
-egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
+egui = { version = "0.37", default-features = false }
 egui_glow = { version = "0.37", default-features = false, optional = true }
 log = "0.4"
 thiserror = "2"
@@ -53,3 +57,7 @@ rustix = { version = "1", features = ["event", "fs", "time"] }
 [dev-dependencies]
 env_logger = "0.11"
 
+[[example]]
+name = "hello"
+# Without fonts every label would be drawn as boxes.
+required-features = ["default_fonts"]

@@ -31,6 +31,7 @@ jobs:
       - run: cargo clippy --all-targets --no-default-features --features kms
       - run: cargo clippy --all-targets --no-default-features
       - run: cargo test
+      - run: cargo test --no-default-features --features linuxfb,input-evdev
       - run: cargo doc --no-deps
 
   # The crate itself is Linux-only at runtime, but it has to keep building on development hosts.

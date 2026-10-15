@@ -31,7 +31,8 @@ Raspberry Pi 5 with the Touch Display 2.
 | `kms` | `kms` (default) | OpenGL ES 2/3 (`egui_glow`) via DRM/KMS + GBM + EGL | Mesa GPUs (Raspberry Pi, i.MX8 etnaviv, ...), NVIDIA Jetson (NVGBM) |
 | `linuxfb` | `linuxfb` (default) | CPU (built-in software rasterizer) | `/dev/fbN` without GPU/KMS drivers, e.g. i.MX6 BSPs |
 
-Input is the separate `input-evdev` feature (default).
+Input is the separate `input-evdev` feature (default), and `default_fonts` (default) bundles
+egui's fonts.
 
 The backend is picked at runtime. `auto` (default) tries `kms` first, then `linuxfb`.
 
@@ -56,6 +57,31 @@ automatically.
   app with an internal clipboard.
 - Keyboards are grabbed by default (`EVIOCGRAB`), so typing doesn't also go to the text console
   behind the app (e.g. a login prompt). Ctrl+C on that keyboard then doesn't stop the app.
+
+## Fonts
+
+`default_fonts` bundles egui's fonts (about 1 MB). To ship your own fonts instead, turn off the
+default features, keep the ones you need, and install the fonts when the app is created:
+
+```toml
+eboard = { version = "0.1", default-features = false, features = ["kms", "linuxfb", "input-evdev"] }
+```
+
+```rust
+eboard::run(eboard::Options::default(), |cc| {
+    let mut fonts = egui::FontDefinitions::empty();
+    let font = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")?;
+    fonts.font_data.insert("DejaVuSans".into(), Arc::new(egui::FontData::from_owned(font)));
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.insert(family, vec!["DejaVuSans".into()]);
+    }
+    cc.egui_ctx.set_fonts(fonts);
+    Ok(Box::new(MyApp))
+})?;
+```
+
+Without any fonts egui draws boxes instead of text. Cargo features are additive, so if another
+dependency enables `egui/default_fonts`, the fonts are bundled anyway.
 
 ## Options
 
@@ -103,7 +129,7 @@ cross build --release --target aarch64-unknown-linux-gnu --example hello
 # 32-bit ARM
 cross build --release --target armv7-unknown-linux-gnueabihf --example hello
 # Boards without libgbm (e.g. i.MX6 with the Vivante fbdev BSP): framebuffer only
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features linuxfb,input-evdev
+cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features linuxfb,input-evdev,default_fonts
 # Intel/AMD boards and industrial PCs
 cross build --release --target x86_64-unknown-linux-gnu --example hello
 ```

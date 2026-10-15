@@ -33,7 +33,7 @@ jobs:
           # 32-bit ARM without libgbm (e.g. i.MX6 BSPs with the Vivante fbdev driver)
           - name: armv7-linuxfb
             target: armv7-unknown-linux-gnueabihf
-            features: --no-default-features --features linuxfb,input-evdev
+            features: --no-default-features --features linuxfb,input-evdev,default_fonts
             no-gbm: true
           # Intel/AMD boards and industrial PCs
           - name: x86_64

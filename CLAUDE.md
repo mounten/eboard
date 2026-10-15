@@ -56,7 +56,7 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
   only build-time native dependency is `libgbm` (via `gbm-sys`, `kms` feature only). Keep it that
   way: new link-time C dependencies have to be added to the cross image as well.
 - A binary built with `kms` does not start on boards without `libgbm.so.1`. Build those boards with
-  `--no-default-features --features linuxfb,input-evdev`.
+  `--no-default-features --features linuxfb,input-evdev,default_fonts`.
 - Binaries must keep running on **glibc 2.31** (JetPack 5, Pi OS Bullseye, older Yocto). Don't
   switch the cross image to a newer base.
 - `drm` must stay on the version `gbm` uses (currently 0.14).
@@ -87,12 +87,19 @@ Cross builds use cross-rs with Podman (`podman machine start` if it is stopped).
 cross build --release --target aarch64-unknown-linux-gnu --example hello
 cross build --release --target armv7-unknown-linux-gnueabihf --example hello
 # i.MX6 without KMS/GBM: framebuffer only, no libgbm needed on the board
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features linuxfb,input-evdev
+cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features linuxfb,input-evdev,default_fonts
 cross build --release --target x86_64-unknown-linux-gnu --example hello
 cross test --target x86_64-unknown-linux-gnu   # run the tests on Linux (the image has libgbm)
 ```
 If cross build scripts fail with `GLIBC_x.y not found` after an image change, delete
 `target/release/{build,deps,.fingerprint}` and `target/<triple>/release` (stale host artifacts).
+
+## Workflow
+- `main` is protected (ruleset "Protect main"): no direct pushes. Work on a branch, open a PR whose
+  **title** is a Conventional Commit (it becomes the squash commit and the changelog entry), and
+  wait for all required checks: `check`, `check (windows-latest)`, `check (macos-latest)`,
+  `boards / aarch64|armv7|armv7-linuxfb|x86_64` and `pr-title`. The owner merges.
+- Changes that affect what users see (new options, features, behavior) need a README update.
 
 ## CI and releases
 Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):

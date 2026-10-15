@@ -182,7 +182,8 @@ fn clip_to_pixels(
     }
 }
 
-#[cfg(test)]
+// These tests render text, so they need egui's fonts.
+#[cfg(all(test, feature = "default_fonts"))]
 mod tests {
     use super::*;
 

@@ -149,7 +149,7 @@ impl Input {
         let at = |x: f32, y: f32| tip + Vec2::new(x, y);
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Debug,
-            egui::Id::unique("egui_embed_cursor"),
+            egui::Id::unique("eboard_cursor"),
         ));
         let fill = egui::Color32::WHITE;
         let outline = egui::Stroke::new(1.0, egui::Color32::BLACK);

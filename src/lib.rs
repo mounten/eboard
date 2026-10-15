@@ -1,5 +1,5 @@
-//! Run [egui](https://github.com/emilk/egui) apps full-screen on embedded Linux without a
-//! compositor, winit or eframe, like Qt's `eglfs` and `linuxfb` platform plugins.
+//! eframe for embedded boards: run [egui](https://github.com/emilk/egui) apps full-screen on
+//! embedded Linux without a compositor or winit, like Qt's `eglfs` and `linuxfb` platform plugins.
 //!
 //! Backends (cargo features, picked at runtime with [`Backend`]):
 //! - `kms`: DRM/KMS + GBM + EGL, painted with OpenGL ES (`egui_glow`).
@@ -10,13 +10,13 @@
 //! ```no_run
 //! struct Hello;
 //!
-//! impl egui_embed::App for Hello {
-//!     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut egui_embed::Frame) {
+//! impl eboard::App for Hello {
+//!     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eboard::Frame) {
 //!         ui.heading("Hello from KMS!");
 //!     }
 //! }
 //!
-//! egui_embed::run(egui_embed::Options::default(), |_cc| Ok(Box::new(Hello))).unwrap();
+//! eboard::run(eboard::Options::default(), |_cc| Ok(Box::new(Hello))).unwrap();
 //! ```
 //!
 //! # Configuration
@@ -26,15 +26,15 @@
 //!
 //! | Variable | Example | |
 //! |---|---|---|
-//! | `EGUI_EMBED_BACKEND` | `kms` | backend (`auto`, `kms`, `linuxfb`) |
-//! | `EGUI_EMBED_KMS_DEVICE` | `/dev/dri/card1` | DRM device |
-//! | `EGUI_EMBED_FB_DEVICE` | `/dev/fb1` | framebuffer device (default `/dev/fb0`) |
-//! | `EGUI_EMBED_KMS_CONNECTOR` | `DSI-1`, `HDMI-A-1` | output |
-//! | `EGUI_EMBED_KMS_MODE` | `1280x720@60` | display mode |
-//! | `EGUI_EMBED_ROTATION` | `90` | clockwise UI rotation (0, 90, 180, 270) |
-//! | `EGUI_EMBED_PHYSICAL_SIZE` | `155x88` | panel size in mm, for the scale factor |
-//! | `EGUI_EMBED_PPP` | `1.5` | fixed `native_pixels_per_point` |
-//! | `EGUI_EMBED_VSYNC` | `0` | async page flips / no `FBIO_WAITFORVSYNC` |
+//! | `EBOARD_BACKEND` | `kms` | backend (`auto`, `kms`, `linuxfb`) |
+//! | `EBOARD_KMS_DEVICE` | `/dev/dri/card1` | DRM device |
+//! | `EBOARD_FB_DEVICE` | `/dev/fb1` | framebuffer device (default `/dev/fb0`) |
+//! | `EBOARD_KMS_CONNECTOR` | `DSI-1`, `HDMI-A-1` | output |
+//! | `EBOARD_KMS_MODE` | `1280x720@60` | display mode |
+//! | `EBOARD_ROTATION` | `90` | clockwise UI rotation (0, 90, 180, 270) |
+//! | `EBOARD_PHYSICAL_SIZE` | `155x88` | panel size in mm, for the scale factor |
+//! | `EBOARD_PPP` | `1.5` | fixed `native_pixels_per_point` |
+//! | `EBOARD_VSYNC` | `0` | async page flips / no `FBIO_WAITFORVSYNC` |
 //!
 //! Set `RUST_LOG=debug` (with a logger such as `env_logger`) to see the EGL/GL implementation and
 //! the chosen device, connector and mode.
@@ -78,7 +78,7 @@ pub type DynError = Box<dyn std::error::Error + Send + Sync>;
 /// Creates the app with `app_creator` and runs it full-screen until it closes or the process
 /// receives SIGINT/SIGTERM. The display is restored before returning.
 ///
-/// `EGUI_EMBED_*` environment variables override `options` (see the crate docs).
+/// `EBOARD_*` environment variables override `options` (see the crate docs).
 pub fn run(
     mut options: Options,
     app_creator: impl FnOnce(&CreationContext<'_>) -> Result<Box<dyn App>, DynError>,

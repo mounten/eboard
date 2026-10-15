@@ -3,9 +3,9 @@
 //! ```sh
 //! RUST_LOG=info cargo run --release --example hello
 //! # Raspberry Pi Touch Display 2 mounted in landscape:
-//! EGUI_EMBED_ROTATION=90 RUST_LOG=info cargo run --release --example hello
+//! EBOARD_ROTATION=90 RUST_LOG=info cargo run --release --example hello
 //! # CPU rendering to /dev/fb0 (no GPU needed):
-//! EGUI_EMBED_BACKEND=linuxfb RUST_LOG=info cargo run --release --example hello
+//! EBOARD_BACKEND=linuxfb RUST_LOG=info cargo run --release --example hello
 //! ```
 //!
 //! Stop it with Ctrl+C or the Quit button; the console comes back.
@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use egui_embed::egui;
+use eboard::egui;
 
 struct Hello {
     started: Instant,
@@ -45,14 +45,14 @@ impl Hello {
     }
 }
 
-impl egui_embed::App for Hello {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut egui_embed::Frame) {
+impl eboard::App for Hello {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eboard::Frame) {
         self.frames += 1;
         let screen = frame.screen().clone();
         self.track_touches(ui.ctx());
 
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Hello from egui-embed");
+            ui.heading("Hello from eboard");
             ui.label(format!(
                 "Output: {} ({})",
                 screen.output_name, screen.backend
@@ -155,7 +155,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let animate = std::env::args().any(|arg| arg == "--animate");
-    let result = egui_embed::run(egui_embed::Options::default(), |cc| {
+    let result = eboard::run(eboard::Options::default(), |cc| {
         log::info!("Starting on {}", cc.screen.output_name);
         Ok(Box::new(Hello {
             started: Instant::now(),

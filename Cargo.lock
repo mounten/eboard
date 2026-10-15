@@ -243,6 +243,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "eboard"
+version = "0.1.0"
+dependencies = [
+ "drm",
+ "egui",
+ "egui_glow",
+ "env_logger",
+ "evdev",
+ "gbm",
+ "khronos-egl",
+ "libc",
+ "libloading",
+ "log",
+ "rustix 1.1.5",
+ "thiserror",
+]
+
+[[package]]
 name = "ecolor"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -269,24 +287,6 @@ dependencies = [
  "profiling",
  "smallvec",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "egui-embed"
-version = "0.1.0"
-dependencies = [
- "drm",
- "egui",
- "egui_glow",
- "env_logger",
- "evdev",
- "gbm",
- "khronos-egl",
- "libc",
- "libloading",
- "log",
- "rustix 1.1.5",
- "thiserror",
 ]
 
 [[package]]

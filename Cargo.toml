@@ -1,10 +1,19 @@
 [package]
-name = "egui-embed"
+name = "eboard"
 version = "0.1.0"
 edition = "2024"
-description = "Run egui apps full-screen on embedded Linux without a compositor (KMS/DRM + GBM + EGL), like Qt's eglfs"
-keywords = ["egui", "embedded", "kms", "drm", "egl"]
+description = "eframe for embedded boards: run egui apps full-screen on Linux without a compositor (KMS/DRM, framebuffer), like Qt's eglfs and linuxfb"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mounten/eboard"
+documentation = "https://docs.rs/eboard"
+readme = "README.md"
+include = ["/src", "/examples", "/README.md", "/CHANGELOG.md", "/LICENSE-APACHE", "/LICENSE-MIT"]
+keywords = ["egui", "embedded", "kms", "framebuffer", "touchscreen"]
 categories = ["gui", "embedded"]
+
+[package.metadata.docs.rs]
+# eboard drives Linux display and input devices; the other platforms only build stubs.
+targets = ["x86_64-unknown-linux-gnu"]
 
 [features]
 default = ["kms", "linuxfb", "input-evdev"]

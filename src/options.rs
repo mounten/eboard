@@ -4,7 +4,7 @@ use std::str::FromStr;
 use crate::{Error, Rotation, TouchTransform, geometry::parse_size};
 
 /// Display backend. Like `QT_QPA_EGLFS_INTEGRATION`, it can be overridden with
-/// `EGUI_EMBED_BACKEND`.
+/// `EBOARD_BACKEND`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Backend {
     /// Try every compiled-in backend in order: `kms`, then `linuxfb`.
@@ -146,49 +146,49 @@ pub(crate) fn select_mode(
 pub struct OutputConfig {
     /// DRM device, e.g. `/dev/dri/card1`. Default: the first `/dev/dri/card*` with a connected
     /// connector. Needed on SoCs where the render GPU and the display controller are separate
-    /// devices (Raspberry Pi 4/5, i.MX8, Jetson). Env: `EGUI_EMBED_KMS_DEVICE`.
+    /// devices (Raspberry Pi 4/5, i.MX8, Jetson). Env: `EBOARD_KMS_DEVICE`.
     pub device: Option<PathBuf>,
 
     /// Framebuffer device for the `linuxfb` backend. Default: `/dev/fb0`.
-    /// Env: `EGUI_EMBED_FB_DEVICE`.
+    /// Env: `EBOARD_FB_DEVICE`.
     pub fb_device: Option<PathBuf>,
 
     /// Connector name as the kernel prints it, e.g. `DSI-1`, `HDMI-A-1`, `DP-1`.
-    /// Default: the first connected connector. Env: `EGUI_EMBED_KMS_CONNECTOR`.
+    /// Default: the first connected connector. Env: `EBOARD_KMS_CONNECTOR`.
     pub connector: Option<String>,
 
-    /// Display mode. Default: the connector's preferred mode. Env: `EGUI_EMBED_KMS_MODE`
+    /// Display mode. Default: the connector's preferred mode. Env: `EBOARD_KMS_MODE`
     /// (`1280x720` or `1280x720@60`).
     pub mode: Option<ModeRequest>,
 
-    /// Rotate the UI on the panel (clockwise). Env: `EGUI_EMBED_ROTATION` (`0`, `90`, `180`,
+    /// Rotate the UI on the panel (clockwise). Env: `EBOARD_ROTATION` (`0`, `90`, `180`,
     /// `270`, `-90`).
     pub rotation: Rotation,
 
     /// Physical size of the panel in mm (native orientation, before rotation). Overrides what the
-    /// connector reports; used to derive `pixels_per_point`. Env: `EGUI_EMBED_PHYSICAL_SIZE`
+    /// connector reports; used to derive `pixels_per_point`. Env: `EBOARD_PHYSICAL_SIZE`
     /// (`155x88`).
     pub physical_size_mm: Option<[u32; 2]>,
 
     /// Fixed `native_pixels_per_point`. Default: derived from the physical size
-    /// (see [`crate::pixels_per_point_from_size`]). Env: `EGUI_EMBED_PPP`.
+    /// (see [`crate::pixels_per_point_from_size`]). Env: `EBOARD_PPP`.
     pub pixels_per_point: Option<f32>,
 }
 
 /// Options for [`crate::run`].
 ///
-/// Every `EGUI_EMBED_*` environment variable that is set overrides the corresponding field, so a
+/// Every `EBOARD_*` environment variable that is set overrides the corresponding field, so a
 /// deployed binary can be reconfigured without rebuilding (like Qt's `QT_QPA_EGLFS_*`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
-    /// Env: `EGUI_EMBED_BACKEND` (`auto`, `kms`, `linuxfb`).
+    /// Env: `EBOARD_BACKEND` (`auto`, `kms`, `linuxfb`).
     pub backend: Backend,
 
     pub output: OutputConfig,
 
     /// Wait for vertical blank before showing a frame (no tearing). If `false`, page flips are
     /// asynchronous where the driver supports it. With `linuxfb`, the copy to the framebuffer
-    /// waits for vblank if the driver supports `FBIO_WAITFORVSYNC`. Env: `EGUI_EMBED_VSYNC`
+    /// waits for vblank if the driver supports `FBIO_WAITFORVSYNC`. Env: `EBOARD_VSYNC`
     /// (`0`/`1`).
     pub vsync: bool,
 
@@ -215,16 +215,16 @@ pub struct Options {
 /// keyboards are detected automatically, including ones plugged in later.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InputOptions {
-    /// Read input devices at all. Env: `EGUI_EMBED_INPUT` (`0`/`1`).
+    /// Read input devices at all. Env: `EBOARD_INPUT` (`0`/`1`).
     pub enabled: bool,
 
-    /// Which devices to open exclusively. Env: `EGUI_EMBED_INPUT_GRAB` (`none`, `keyboards`,
+    /// Which devices to open exclusively. Env: `EBOARD_INPUT_GRAB` (`none`, `keyboards`,
     /// `all`).
     pub grab: InputGrab,
 
     /// Fix touch controllers whose axes don't match the panel (applied before
     /// [`OutputConfig::rotation`], which touch follows automatically).
-    /// Env: `EGUI_EMBED_TOUCH_TRANSFORM` (`swapxy,invx,invy`).
+    /// Env: `EBOARD_TOUCH_TRANSFORM` (`swapxy,invx,invy`).
     pub touch_transform: TouchTransform,
 
     /// Draw a mouse cursor when a mouse is used (there is no compositor to draw one).
@@ -259,7 +259,7 @@ impl Default for Options {
 }
 
 impl Options {
-    /// Applies the `EGUI_EMBED_*` environment variables. Called by [`crate::run`].
+    /// Applies the `EBOARD_*` environment variables. Called by [`crate::run`].
     pub fn apply_env_overrides(&mut self) -> Result<(), Error> {
         self.apply_overrides(|key| std::env::var(key).ok())
     }
@@ -284,50 +284,50 @@ impl Options {
 
         let var = |key: &str| var(key).filter(|v| !v.trim().is_empty());
 
-        if let Some(v) = var("EGUI_EMBED_BACKEND") {
-            self.backend = parse("EGUI_EMBED_BACKEND", &v)?;
+        if let Some(v) = var("EBOARD_BACKEND") {
+            self.backend = parse("EBOARD_BACKEND", &v)?;
         }
-        if let Some(v) = var("EGUI_EMBED_KMS_DEVICE") {
+        if let Some(v) = var("EBOARD_KMS_DEVICE") {
             self.output.device = Some(PathBuf::from(v));
         }
-        if let Some(v) = var("EGUI_EMBED_FB_DEVICE") {
+        if let Some(v) = var("EBOARD_FB_DEVICE") {
             self.output.fb_device = Some(PathBuf::from(v));
         }
-        if let Some(v) = var("EGUI_EMBED_KMS_CONNECTOR") {
+        if let Some(v) = var("EBOARD_KMS_CONNECTOR") {
             self.output.connector = Some(v.trim().to_owned());
         }
-        if let Some(v) = var("EGUI_EMBED_KMS_MODE") {
-            self.output.mode = Some(parse("EGUI_EMBED_KMS_MODE", &v)?);
+        if let Some(v) = var("EBOARD_KMS_MODE") {
+            self.output.mode = Some(parse("EBOARD_KMS_MODE", &v)?);
         }
-        if let Some(v) = var("EGUI_EMBED_ROTATION") {
-            self.output.rotation = parse("EGUI_EMBED_ROTATION", &v)?;
+        if let Some(v) = var("EBOARD_ROTATION") {
+            self.output.rotation = parse("EBOARD_ROTATION", &v)?;
         }
-        if let Some(v) = var("EGUI_EMBED_PHYSICAL_SIZE") {
+        if let Some(v) = var("EBOARD_PHYSICAL_SIZE") {
             let size = parse_size(&v).ok_or_else(|| {
                 Error::Config(format!(
-                    "EGUI_EMBED_PHYSICAL_SIZE={v:?}: expected WIDTHxHEIGHT in mm"
+                    "EBOARD_PHYSICAL_SIZE={v:?}: expected WIDTHxHEIGHT in mm"
                 ))
             })?;
             self.output.physical_size_mm = Some(size);
         }
-        if let Some(v) = var("EGUI_EMBED_PPP") {
-            let ppp: f32 = parse("EGUI_EMBED_PPP", &v)?;
+        if let Some(v) = var("EBOARD_PPP") {
+            let ppp: f32 = parse("EBOARD_PPP", &v)?;
             if !(ppp.is_finite() && ppp > 0.0) {
-                return Err(Error::Config(format!("EGUI_EMBED_PPP={v:?}: must be > 0")));
+                return Err(Error::Config(format!("EBOARD_PPP={v:?}: must be > 0")));
             }
             self.output.pixels_per_point = Some(ppp);
         }
-        if let Some(v) = var("EGUI_EMBED_VSYNC") {
-            self.vsync = parse_bool("EGUI_EMBED_VSYNC", &v)?;
+        if let Some(v) = var("EBOARD_VSYNC") {
+            self.vsync = parse_bool("EBOARD_VSYNC", &v)?;
         }
-        if let Some(v) = var("EGUI_EMBED_INPUT") {
-            self.input.enabled = parse_bool("EGUI_EMBED_INPUT", &v)?;
+        if let Some(v) = var("EBOARD_INPUT") {
+            self.input.enabled = parse_bool("EBOARD_INPUT", &v)?;
         }
-        if let Some(v) = var("EGUI_EMBED_INPUT_GRAB") {
-            self.input.grab = parse("EGUI_EMBED_INPUT_GRAB", &v)?;
+        if let Some(v) = var("EBOARD_INPUT_GRAB") {
+            self.input.grab = parse("EBOARD_INPUT_GRAB", &v)?;
         }
-        if let Some(v) = var("EGUI_EMBED_TOUCH_TRANSFORM") {
-            self.input.touch_transform = parse("EGUI_EMBED_TOUCH_TRANSFORM", &v)?;
+        if let Some(v) = var("EBOARD_TOUCH_TRANSFORM") {
+            self.input.touch_transform = parse("EBOARD_TOUCH_TRANSFORM", &v)?;
         }
         Ok(())
     }
@@ -356,17 +356,17 @@ mod tests {
     #[test]
     fn env_overrides_all_fields() {
         let o = with_env(&[
-            ("EGUI_EMBED_BACKEND", "KMS"),
-            ("EGUI_EMBED_KMS_DEVICE", "/dev/dri/card1"),
-            ("EGUI_EMBED_FB_DEVICE", "/dev/fb1"),
-            ("EGUI_EMBED_KMS_CONNECTOR", "DSI-1"),
-            ("EGUI_EMBED_KMS_MODE", "720x1280@60"),
-            ("EGUI_EMBED_ROTATION", "-90"),
-            ("EGUI_EMBED_PHYSICAL_SIZE", "88x155"),
-            ("EGUI_EMBED_PPP", "1.5"),
-            ("EGUI_EMBED_VSYNC", "0"),
-            ("EGUI_EMBED_INPUT_GRAB", "all"),
-            ("EGUI_EMBED_TOUCH_TRANSFORM", "invy"),
+            ("EBOARD_BACKEND", "KMS"),
+            ("EBOARD_KMS_DEVICE", "/dev/dri/card1"),
+            ("EBOARD_FB_DEVICE", "/dev/fb1"),
+            ("EBOARD_KMS_CONNECTOR", "DSI-1"),
+            ("EBOARD_KMS_MODE", "720x1280@60"),
+            ("EBOARD_ROTATION", "-90"),
+            ("EBOARD_PHYSICAL_SIZE", "88x155"),
+            ("EBOARD_PPP", "1.5"),
+            ("EBOARD_VSYNC", "0"),
+            ("EBOARD_INPUT_GRAB", "all"),
+            ("EBOARD_TOUCH_TRANSFORM", "invy"),
         ])
         .unwrap();
         assert_eq!(o.backend, Backend::Kms);
@@ -393,24 +393,22 @@ mod tests {
     #[test]
     fn empty_env_values_are_ignored() {
         assert_eq!(
-            with_env(&[("EGUI_EMBED_ROTATION", "")]).unwrap(),
+            with_env(&[("EBOARD_ROTATION", "")]).unwrap(),
             Options::default()
         );
     }
 
     #[test]
     fn invalid_env_values_are_errors() {
-        assert!(with_env(&[("EGUI_EMBED_BACKEND", "wayland")]).is_err());
+        assert!(with_env(&[("EBOARD_BACKEND", "wayland")]).is_err());
         assert_eq!(
-            with_env(&[("EGUI_EMBED_BACKEND", "fbdev")])
-                .unwrap()
-                .backend,
+            with_env(&[("EBOARD_BACKEND", "fbdev")]).unwrap().backend,
             Backend::LinuxFb
         );
-        assert!(with_env(&[("EGUI_EMBED_ROTATION", "45")]).is_err());
-        assert!(with_env(&[("EGUI_EMBED_KMS_MODE", "big")]).is_err());
-        assert!(with_env(&[("EGUI_EMBED_PPP", "-1")]).is_err());
-        assert!(with_env(&[("EGUI_EMBED_VSYNC", "maybe")]).is_err());
+        assert!(with_env(&[("EBOARD_ROTATION", "45")]).is_err());
+        assert!(with_env(&[("EBOARD_KMS_MODE", "big")]).is_err());
+        assert!(with_env(&[("EBOARD_PPP", "-1")]).is_err());
+        assert!(with_env(&[("EBOARD_VSYNC", "maybe")]).is_err());
     }
 
     fn mode(width: u32, height: u32, refresh_hz: f32, preferred: bool) -> ModeCandidate {

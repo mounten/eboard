@@ -1,8 +1,8 @@
-# egui-embed
+# eboard
 
 Runs egui apps full-screen on embedded Linux **without a compositor, winit or eframe**, the way Qt's
 `eglfs` and `linuxfb` do. The public API mirrors eframe 0.37 (`App`, `Frame`, `CreationContext`,
-`run`). Backends are cargo features, selected at runtime (`EGUI_EMBED_BACKEND`, `Backend::Auto`
+`run`). Backends are cargo features, selected at runtime (`EBOARD_BACKEND`, `Backend::Auto`
 tries them in this order):
 - `kms`: DRM/KMS + GBM + EGL, painted with OpenGL ES through `egui_glow`.
 - `linuxfb`: `/dev/fbN`, painted on the CPU by our own rasterizer (`soft` feature). For boards
@@ -15,7 +15,7 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 - `src/lib.rs`: `run()`, backend selection (`backends::run`), and `run_on`, which wires any
   `Platform` + its renderer to the runner.
 - `src/app.rs`: `App` trait, `Frame`, `CreationContext`, `ScreenInfo`.
-- `src/options.rs`: `Options`, `EGUI_EMBED_*` env overrides, mode selection (pure, tested).
+- `src/options.rs`: `Options`, `EBOARD_*` env overrides, mode selection (pure, tested).
 - `src/geometry.rs`: rotation math (continuous and pixel-exact), pixels-per-point (pure, tested).
 - `src/runner.rs`: run loop, generic over `Platform`. It sleeps in `poll()` on the platform fd (DRM
   page flips) plus an eventfd that egui's repaint callback and the signal handler write to.
@@ -88,13 +88,30 @@ cross build --release --target aarch64-unknown-linux-gnu --example hello
 cross build --release --target armv7-unknown-linux-gnueabihf --example hello
 # i.MX6 without KMS/GBM: framebuffer only, no libgbm needed on the board
 cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features linuxfb,input-evdev
+cross build --release --target x86_64-unknown-linux-gnu --example hello
+cross test --target x86_64-unknown-linux-gnu   # run the tests on Linux (the image has libgbm)
 ```
 If cross build scripts fail with `GLIBC_x.y not found` after an image change, delete
 `target/release/{build,deps,.fingerprint}` and `target/<triple>/release` (stale host artifacts).
 
+## CI and releases
+Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
+- `.github/workflows/ci.yml`: fmt, clippy for the host and both ARM targets plus feature combos,
+  tests (the runner installs `libgbm-dev`), docs, a Windows/macOS build check, the board builds and
+  a Conventional Commits check of PR titles (PRs are squash-merged).
+- `.github/workflows/boards.yml` (reusable): `cross build` of `hello` for aarch64, armv7,
+  armv7-linuxfb (must not link libgbm) and x86_64; fails if a binary needs glibc > 2.31. Uploads
+  artifacts in CI, or attaches them to the GitHub release.
+- `.github/workflows/release-plz.yml` + `release-plz.toml`: release PR on every push to `main`;
+  merging it publishes to crates.io, tags `vX.Y.Z` and creates the GitHub release. Needs the
+  secrets `CARGO_REGISTRY_TOKEN` and `RELEASE_PLZ_TOKEN`.
+- Commit messages and PR titles must be Conventional Commits; they become the changelog.
+- Workflows can be linted locally with actionlint:
+  `MSYS_NO_PATHCONV=1 podman run --rm -v "$(cygpath -w "$PWD"):/repo" -w /repo docker.io/rhysd/actionlint:latest`
+
 ## Status
 - Phase 1 (KMS + EGL + glow, rotation, event-driven repaint, signals) is done and verified on a
-  Raspberry Pi 5 + Touch Display 2, including `EGUI_EMBED_ROTATION=90`.
+  Raspberry Pi 5 + Touch Display 2, including `EBOARD_ROTATION=90`.
 - `linuxfb` + software renderer is done and verified on the Pi 5 through DRM's fbdev emulation (0° and
   90°, 60 fps animated at ~2.6 ms CPU per frame, ~0% idle). Not yet tried on the i.MX6.
 - Input (evdev touch/mouse/keyboard, hotplug, keyboard grab) is done and verified on the Pi 5 with

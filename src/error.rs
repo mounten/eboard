@@ -10,7 +10,7 @@ pub enum Error {
     #[error("backend {0:?} is not available in this build")]
     BackendUnavailable(crate::Backend),
 
-    /// Invalid configuration (options or `EGUI_EMBED_*` environment variables).
+    /// Invalid configuration (options or `EBOARD_*` environment variables).
     #[error("invalid configuration: {0}")]
     Config(String),
 

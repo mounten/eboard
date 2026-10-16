@@ -46,6 +46,8 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
     clipboard) and `Input`, which the runner polls; draws the software mouse cursor.
 - `examples/hello.rs`: interactive demo (button, slider, text field, touch markers). It is the
   hardware smoke test; `--animate` repaints every frame.
+- `examples/hud.rs`: overlay HUD on a key color (chroma key for an FPGA/video mixer): key from
+  `App::clear_color`, frameless central panel, feathering off, text on opaque plates.
 - `tools/`: stdlib-only Python helpers for testing on a board over SSH: `uinput_touch.py`
   (virtual touchscreen), `uinput_kbdmouse.py` (virtual keyboard + mouse), both need root;
   `fb2png.py` turns a `/dev/fb0` dump into a PNG to see what the linuxfb backend drew.

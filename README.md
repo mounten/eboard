@@ -115,6 +115,24 @@ rotates while copying.
 Set `RUST_LOG=info` (or `debug`) with a logger such as `env_logger` to see the chosen device,
 mode, pixel format and GPU.
 
+## Overlays (chroma key)
+
+For a HUD that external hardware (an FPGA, a video mixer) mixes with live video, fill everything
+that is not UI with a key color. The screen is cleared to `App::clear_color` before every frame,
+so:
+
+- Return the key color from `App::clear_color`.
+- Give the central panel no frame (`egui::CentralPanel::default().frame(egui::Frame::NONE)`);
+  by default it paints `panel_fill` over the whole screen.
+- Turn off feathering (`ctx.tessellation_options_mut(|o| o.feathering = false)`), otherwise the
+  anti-aliased edges of shapes blend with the key into colors the keyer won't recognize.
+- Put text on opaque plates: glyphs are always anti-aliased, and on a plate their edges blend with
+  the plate instead of the key. Avoid translucent fills and shadows over the key.
+- Pick a key that the framebuffer format stores exactly. Channels of `00` or `ff` (e.g. pure green
+  `#00ff00`) work in every format, RGB565 included.
+
+`examples/hud.rs` does all of this (`--key RRGGBB` picks another key color).
+
 ## Building
 
 The crate targets `*-linux-gnu` (vendor GPU libraries are glibc-linked). EGL and GLES are loaded at
@@ -149,6 +167,7 @@ Every GitHub release has the `hello` example for these targets attached, ready t
 ```sh
 RUST_LOG=info ./hello                              # interactive demo; Quit button or Ctrl+C
 RUST_LOG=info ./hello --animate                    # repaint every frame
+RUST_LOG=info ./hud                                # overlay HUD on a green key color
 EBOARD_ROTATION=90 RUST_LOG=info ./hello
 EBOARD_BACKEND=linuxfb RUST_LOG=info ./hello
 ```

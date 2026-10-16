@@ -223,6 +223,104 @@ mod tests {
         assert!(distinct.len() > 10, "only {} colors drawn", distinct.len());
     }
 
+    /// Overlay HUDs (see `examples/hud.rs`) rely on every pixel outside the UI being exactly the
+    /// clear color, down to the framebuffer, so a keyer can replace it with video. With
+    /// feathering off, shape edges are not blended with it either.
+    #[test]
+    fn clear_color_is_exact_outside_the_ui() {
+        let key = egui::Color32::from_rgb(0, 255, 0);
+        let ctx = egui::Context::default();
+        ctx.tessellation_options_mut(|o| o.feathering = false);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(200.0, 100.0),
+            )),
+            ..Default::default()
+        };
+        let mut plate = egui::Rect::NOTHING;
+        let output = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    plate = egui::Frame::NONE
+                        .fill(egui::Color32::from_gray(20))
+                        .inner_margin(8.0)
+                        .show(ui, |ui| ui.label("HUD"))
+                        .response
+                        .rect;
+                    let painter = ui.painter();
+                    painter.circle_filled(egui::pos2(150.0, 40.0), 20.0, egui::Color32::WHITE);
+                    painter.line_segment(
+                        [egui::pos2(90.0, 95.0), egui::pos2(195.0, 70.0)],
+                        egui::Stroke::new(3.0, egui::Color32::WHITE),
+                    );
+                });
+        });
+        let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+        let mut textures = output.textures_delta;
+        let mut renderer = SoftRenderer::new();
+        renderer.paint(
+            [200, 100],
+            1.0,
+            key.to_normalized_gamma_f32(),
+            &primitives,
+            &mut textures,
+        );
+
+        let canvas = renderer.canvas();
+        let (x0, y0) = (plate.min.x.floor() as usize, plate.min.y.floor() as usize);
+        let (x1, y1) = (plate.max.x.ceil() as usize, plate.max.y.ceil() as usize);
+        assert!(
+            x1 > x0 && y1 > y0 && x1 < 200 && y1 < 100,
+            "plate {plate:?}"
+        );
+        let (mut keyed, mut white) = (0, 0);
+        for (i, &pixel) in canvas.pixels.iter().enumerate() {
+            let (x, y) = (i % canvas.width, i / canvas.width);
+            if (x0..x1).contains(&x) && (y0..y1).contains(&y) {
+                continue;
+            }
+            if pixel == key.to_array() {
+                keyed += 1;
+            } else {
+                assert_eq!(pixel, [255; 4], "pixel ({x}, {y}) is blended with the key");
+                white += 1;
+            }
+        }
+        assert!(
+            keyed > 200 * 100 / 2 && white > 1000,
+            "{keyed} keyed, {white} white"
+        );
+
+        // Exact in the framebuffer formats too.
+        for (format, expected) in [
+            (blit::PixelFormat::XRGB8888, 0x0000_ff00),
+            (blit::PixelFormat::RGB565, 0x07e0),
+        ] {
+            let bpp = format.bytes_per_pixel;
+            let mut memory = vec![0u8; 200 * 100 * bpp];
+            let mut target = blit::Target {
+                memory: &mut memory,
+                stride: 200 * bpp,
+                format,
+                size: [200, 100],
+            };
+            blit::blit(
+                &canvas.pixels,
+                canvas.width,
+                crate::Rotation::Deg0,
+                blit::PixelRect::full([200, 100]),
+                &mut target,
+                &mut Vec::new(),
+            );
+            let corner = &memory[(99 * 200 + 199) * bpp..][..bpp];
+            let mut value = [0u8; 4];
+            value[..bpp].copy_from_slice(corner);
+            assert_eq!(u32::from_le_bytes(value), expected, "{}", format.name());
+        }
+    }
+
     /// Renders a typical UI to `target/soft_snapshot.png` for a visual check:
     /// `cargo test soft_snapshot -- --ignored`.
     #[test]

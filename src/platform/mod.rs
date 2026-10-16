@@ -1,5 +1,6 @@
 //! Display platforms: bring up a surface without a window system and present frames to it.
 
+pub(crate) mod backlight;
 #[cfg(all(target_os = "linux", any(feature = "kms", feature = "viv-fb")))]
 pub(crate) mod egl;
 #[cfg(all(target_os = "linux", any(feature = "linuxfb", feature = "viv-fb")))]
@@ -68,6 +69,15 @@ pub(crate) trait Platform {
 
     /// Handles pending platform events (page-flip completion).
     fn dispatch_events(&mut self) -> Result<(), Error>;
+
+    /// Powers the display down (idle blanking) or back up. Nothing is presented while it is
+    /// blanked. The platform has to unblank it when it is dropped.
+    fn set_blanked(&mut self, _blanked: bool) -> Result<(), Error> {
+        Err(Error::Config(format!(
+            "the {} backend cannot blank the display",
+            self.name()
+        )))
+    }
 }
 
 /// An initialized platform with its renderer, ready to run an app.

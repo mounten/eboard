@@ -1,12 +1,14 @@
 #[cfg(feature = "glow")]
 use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(feature = "glow")]
 use crate::glow;
 
-use crate::Rotation;
 #[cfg(feature = "persistence")]
 use crate::Storage;
+use crate::platform::backlight::Backlight;
+use crate::{Error, Rotation};
 
 /// Implement this for your application. Mirrors `eframe::App`.
 pub trait App {
@@ -91,6 +93,9 @@ pub struct Frame {
     pub(crate) gl: Option<Arc<glow::Context>>,
     #[cfg(feature = "persistence")]
     pub(crate) storage: Option<Box<dyn Storage>>,
+    pub(crate) backlight: Option<Backlight>,
+    /// Set by [`Frame::set_blank_after`], applied by the runner after the frame.
+    pub(crate) blank_after_request: Option<Option<Duration>>,
 }
 
 impl Frame {
@@ -103,6 +108,33 @@ impl Frame {
     /// GL calls. Excludes waiting for vsync.
     pub fn cpu_usage(&self) -> Option<f32> {
         self.cpu_usage
+    }
+
+    /// Brightness of the panel backlight, `0.0..=1.0`. `None` if there is no backlight device
+    /// (see [`crate::OutputConfig::backlight`]) or it can't be read.
+    pub fn brightness(&self) -> Option<f32> {
+        self.backlight
+            .as_ref()?
+            .get()
+            .inspect_err(|e| log::debug!("Reading the backlight: {e}"))
+            .ok()
+    }
+
+    /// Sets the backlight brightness, `0.0..=1.0`. On many panels 0 turns the backlight off
+    /// completely, so a UI slider should start above 0. Fails if there is no backlight device or
+    /// no permission to write it (the user needs the `video` group or a udev rule).
+    pub fn set_brightness(&mut self, brightness: f32) -> Result<(), Error> {
+        let backlight = self.backlight.as_ref().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no backlight device")
+        })?;
+        Ok(backlight.set(brightness)?)
+    }
+
+    /// Changes how long the display waits without input before it blanks (see
+    /// [`crate::Options::blank_after`]); `None` turns blanking off, e.g. while a video plays or
+    /// an alarm is shown. Takes effect after this frame and counts from the last input.
+    pub fn set_blank_after(&mut self, blank_after: Option<Duration>) {
+        self.blank_after_request = Some(blank_after);
     }
 
     /// Exit the run loop after this frame. Same as sending

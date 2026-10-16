@@ -11,6 +11,7 @@
 //! [`Egl`] loads.
 
 use std::ffi::{c_int, c_ulong, c_void};
+use std::fs::File;
 use std::os::fd::{AsRawFd as _, BorrowedFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -102,6 +103,9 @@ pub(crate) struct VivFbPlatform {
     display: *mut c_void,
     fb: FbApi,
 
+    /// Our handle on the framebuffer, for blanking.
+    file: File,
+    blanked: bool,
     output_name: String,
     panel_size: [u32; 2],
     physical_size_mm: Option<[u32; 2]>,
@@ -156,6 +160,8 @@ impl VivFbPlatform {
             window: std::ptr::null_mut(),
             display,
             fb,
+            file,
+            blanked: false,
             output_name: format!("{id} {}", path.display()),
             panel_size: [0, 0],
             physical_size_mm: None,
@@ -187,7 +193,7 @@ impl VivFbPlatform {
         this.panel_size = [width as u32, height as u32];
 
         // Read again: with FB_MULTI_BUFFER the driver enlarges the virtual size itself.
-        let var = fbdev::var_screeninfo(file.as_raw_fd())
+        let var = fbdev::var_screeninfo(this.file.as_raw_fd())
             .map_err(|e| fbdev::fb_err(&path, &format!("FBIOGET_VSCREENINFO: {e}")))?;
         this.refresh_hz = fbdev::refresh_hz(&var);
         this.physical_size_mm = options
@@ -218,7 +224,6 @@ impl VivFbPlatform {
         }
 
         this.init_egl(options, bpp)?;
-        drop(file);
         this._vt = vt::enter_graphics_mode();
         Ok(this)
     }
@@ -328,10 +333,20 @@ impl Platform for VivFbPlatform {
     fn dispatch_events(&mut self) -> Result<(), Error> {
         Ok(())
     }
+
+    fn set_blanked(&mut self, blanked: bool) -> Result<(), Error> {
+        fbdev::blank(self.file.as_raw_fd(), blanked)
+            .map_err(|e| Error::Framebuffer(format!("{}: FBIOBLANK: {e}", self.output_name)))?;
+        self.blanked = blanked;
+        Ok(())
+    }
 }
 
 impl Drop for VivFbPlatform {
     fn drop(&mut self) {
+        if self.blanked {
+            fbdev::unblank(self.file.as_raw_fd());
+        }
         self.gl = None;
         if let Some(egl) = &mut self.egl {
             egl.destroy_surface();

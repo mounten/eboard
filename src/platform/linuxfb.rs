@@ -50,6 +50,7 @@ pub(crate) struct LinuxFbPlatform {
     refresh_hz: f32,
     physical_size_mm: Option<[u32; 2]>,
     vsync: bool,
+    blanked: bool,
     /// Last frame copied to the framebuffer (logical canvas), for damage detection.
     previous: Vec<[u8; 4]>,
     row: Vec<u8>,
@@ -167,6 +168,7 @@ impl LinuxFbPlatform {
             refresh_hz,
             physical_size_mm,
             vsync,
+            blanked: false,
             previous: Vec::new(),
             row: Vec::new(),
             _vt: vt,
@@ -282,10 +284,25 @@ impl Platform for LinuxFbPlatform {
     fn dispatch_events(&mut self) -> Result<(), Error> {
         Ok(())
     }
+
+    fn set_blanked(&mut self, blanked: bool) -> Result<(), Error> {
+        fbdev::blank(self.file.as_raw_fd(), blanked)
+            .map_err(|e| fb_err(&self.path, &format!("FBIOBLANK: {e}")))?;
+        self.blanked = blanked;
+        if !blanked {
+            // The console may have drawn over the framebuffer when it unblanked: copy everything
+            // on the next present.
+            self.previous.clear();
+        }
+        Ok(())
+    }
 }
 
 impl Drop for LinuxFbPlatform {
     fn drop(&mut self) {
+        if self.blanked {
+            fbdev::unblank(self.file.as_raw_fd());
+        }
         // SAFETY: mapped in `new` with this length.
         unsafe { libc::munmap(self.memory.cast(), self.memory_len) };
     }

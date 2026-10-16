@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use rustix::event::{EventfdFlags, PollFd, PollFlags};
 
+use crate::idle::IdleTimer;
 use crate::platform::Platform;
 use crate::render::Renderer;
 use crate::{App, Error, Frame, signals};
@@ -64,6 +65,12 @@ pub(crate) struct Runner<'a, P: Platform> {
     pub handle_signals: bool,
     #[cfg(feature = "input-evdev")]
     pub input: Option<crate::input::Input>,
+    /// Swallows the gesture that wakes the display.
+    #[cfg(feature = "input-evdev")]
+    pub wake_filter: crate::idle::WakeFilter,
+    pub idle: IdleTimer,
+    /// There is input that can wake a blanked display.
+    pub can_wake: bool,
 }
 
 impl<P: Platform> Runner<'_, P> {
@@ -86,6 +93,9 @@ impl<P: Platform> Runner<'_, P> {
         };
 
         let result = self.event_loop(app, &signal);
+        if self.idle.is_blanked() {
+            self.wake();
+        }
         #[cfg(feature = "persistence")]
         self.save(app);
         app.on_exit();
@@ -119,18 +129,26 @@ impl<P: Platform> Runner<'_, P> {
                 save_deadline = None;
                 self.save(app);
             }
+            if self.idle.should_blank(now) {
+                self.blank();
+            }
+            let blanked = self.idle.is_blanked();
             let ready_at = match (next_repaint, earliest_frame) {
                 (Some(t), Some(earliest)) => Some(t.max(earliest)),
                 (t, _) => t,
             };
             let due = ready_at.is_some_and(|t| t <= now);
-            if due && self.platform.can_render() {
+            // While the display is dark, repaint requests wait until it wakes up.
+            if due && !blanked && self.platform.can_render() {
                 earliest_frame = self
                     .platform
                     .frame_interval()
                     .and_then(|i| now.checked_add(i));
                 let (repaint_delay, close) = self.frame(app, start)?;
                 next_repaint = Instant::now().checked_add(repaint_delay);
+                if let Some(blank_after) = self.frame.blank_after_request.take() {
+                    self.set_blank_after(blank_after);
+                }
                 #[cfg(feature = "persistence")]
                 if save_deadline.is_none() && self.frame.storage.is_some() {
                     save_deadline = Instant::now().checked_add(app.auto_save_interval());
@@ -145,7 +163,9 @@ impl<P: Platform> Runner<'_, P> {
             // Sleep until the pending page flip completes (a frame is due but cannot be rendered
             // yet) or until the next repaint. With nothing to do, block indefinitely: idle CPU
             // stays at zero.
-            let timeout = if due {
+            let timeout = if blanked {
+                None // only input (or a signal) wakes us
+            } else if due {
                 if self.platform.event_fd().is_some() {
                     None
                 } else {
@@ -154,6 +174,12 @@ impl<P: Platform> Runner<'_, P> {
             } else {
                 ready_at.map(|t| t.saturating_duration_since(now))
             };
+            let timeout = earliest(
+                timeout,
+                self.idle
+                    .deadline()
+                    .map(|t| t.saturating_duration_since(now)),
+            );
             #[cfg(feature = "persistence")]
             let timeout = earliest(
                 timeout,
@@ -162,6 +188,10 @@ impl<P: Platform> Runner<'_, P> {
             if self.wait(signal, timeout)? {
                 // Input: repaint right away (still paced by vsync / the frame interval).
                 let now = Instant::now();
+                self.idle.activity(now);
+                if self.idle.is_blanked() {
+                    self.wake();
+                }
                 next_repaint = Some(next_repaint.map_or(now, |t| t.min(now)));
             }
         }
@@ -180,6 +210,39 @@ impl<P: Platform> Runner<'_, P> {
             });
         }
         storage.flush();
+    }
+
+    /// Powers the display down after the idle timeout.
+    fn blank(&mut self) {
+        match self.platform.set_blanked(true) {
+            Ok(()) => {
+                log::info!("No input for a while, display blanked");
+                self.idle.set_blanked(true);
+            }
+            Err(e) => {
+                log::warn!("Idle blanking turned off: {e}");
+                self.idle.set_blank_after(None);
+            }
+        }
+    }
+
+    /// Powers the display up again; the input that woke it is swallowed.
+    fn wake(&mut self) {
+        if let Err(e) = self.platform.set_blanked(false) {
+            log::warn!("Waking the display: {e}");
+        }
+        self.idle.set_blanked(false);
+        #[cfg(feature = "input-evdev")]
+        self.wake_filter.start();
+        log::info!("Display woken by input");
+    }
+
+    fn set_blank_after(&mut self, blank_after: Option<Duration>) {
+        if blank_after.is_some() && !self.can_wake {
+            log::warn!("Idle blanking needs input to wake the display; it stays off");
+            return;
+        }
+        self.idle.set_blank_after(blank_after);
     }
 
     /// egui's current points-to-pixels factor.
@@ -338,14 +401,13 @@ impl<P: Platform> Runner<'_, P> {
         #[cfg(feature = "input-evdev")]
         if let Some(input) = &mut self.input {
             // Modifier state reaches egui as `ModifiersChanged` events.
-            raw_input.events = input.take_events();
+            raw_input.events = self.wake_filter.filter(input.take_events());
         }
         raw_input
     }
 }
 
 /// The shorter of two poll timeouts, where `None` means "no timeout".
-#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
 fn earliest(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),

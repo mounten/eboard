@@ -8,6 +8,8 @@
 //! EBOARD_BACKEND=viv-fb RUST_LOG=info cargo run --release --example hello
 //! # CPU rendering to /dev/fb0 (no GPU needed):
 //! EBOARD_BACKEND=linuxfb RUST_LOG=info cargo run --release --example hello
+//! # Blank the display after 30 s without input; a tap wakes it:
+//! EBOARD_BLANK_AFTER=30 RUST_LOG=info cargo run --release --example hello
 //! ```
 //!
 //! Stop it with Ctrl+C or the Quit button; the console comes back. Built with
@@ -101,6 +103,15 @@ impl eboard::App for Hello {
                 }
             });
             ui.add(egui::Slider::new(&mut self.value, 0.0..=100.0).text("Slider"));
+            if let Some(mut brightness) = frame.brightness() {
+                // Not down to 0: on many panels that switches the backlight off completely.
+                let slider = egui::Slider::new(&mut brightness, 0.05..=1.0).text("Brightness");
+                if ui.add(slider).changed()
+                    && let Err(e) = frame.set_brightness(brightness)
+                {
+                    log::warn!("{e}");
+                }
+            }
             ui.text_edit_singleline(&mut self.text);
             let pointer = ui.input(|i| i.pointer.latest_pos());
             ui.label(format!(

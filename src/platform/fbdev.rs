@@ -12,6 +12,7 @@ const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 const FBIOBLANK: libc::c_ulong = 0x4611;
 
 const FB_BLANK_UNBLANK: libc::c_int = 0;
+const FB_BLANK_POWERDOWN: libc::c_int = 4;
 
 /// `struct fb_bitfield` from `<linux/fb.h>`.
 #[repr(C)]
@@ -131,8 +132,22 @@ pub(crate) fn var_screeninfo(fd: libc::c_int) -> std::io::Result<FbVarScreeninfo
 
 /// Wakes the display if it was blanked by the console's power saving.
 pub(crate) fn unblank(fd: libc::c_int) {
+    let _ = blank(fd, false);
+}
+
+/// Powers the display down (`FB_BLANK_POWERDOWN`) or back up.
+pub(crate) fn blank(fd: libc::c_int, blanked: bool) -> std::io::Result<()> {
+    let level = if blanked {
+        FB_BLANK_POWERDOWN
+    } else {
+        FB_BLANK_UNBLANK
+    };
     // SAFETY: FBIOBLANK takes the blank level as the argument value.
-    unsafe { libc::ioctl(fd, FBIOBLANK as _, FB_BLANK_UNBLANK) };
+    if unsafe { libc::ioctl(fd, FBIOBLANK as _, level) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// Refresh rate from the mode timings; 60 Hz if the driver does not report them (DRM fbdev

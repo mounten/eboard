@@ -8,6 +8,8 @@ mod codes;
 #[cfg(target_os = "linux")]
 pub(crate) mod devices;
 mod keyboard;
+#[cfg(feature = "osk")]
+mod osk;
 mod pointer;
 mod touch;
 
@@ -96,6 +98,8 @@ pub(crate) struct Input {
     devices: devices::InputDevices,
     shared: Shared,
     show_cursor: bool,
+    #[cfg(feature = "osk")]
+    osk: osk::Osk,
 }
 
 #[cfg(target_os = "linux")]
@@ -110,6 +114,8 @@ impl Input {
             devices: devices::InputDevices::open(&options.input),
             shared: Shared::new(panel_size, options.output.rotation),
             show_cursor: options.input.show_cursor,
+            #[cfg(feature = "osk")]
+            osk: osk::Osk::new(options.input.osk),
         })
     }
 
@@ -117,25 +123,71 @@ impl Input {
         self.devices.fds()
     }
 
-    /// Reads pending device events. Returns true if egui has new events to process.
+    /// Reads pending device events. Returns true if egui has new events to process or devices
+    /// came or went (the on-screen keyboard may have to show or hide).
     pub(crate) fn dispatch(&mut self, pixels_per_point: f32) -> bool {
         self.shared.pixels_per_point = pixels_per_point;
         let before = self.shared.events.len();
-        self.devices.dispatch(&mut self.shared);
-        self.shared.events.len() > before
+        let devices_changed = self.devices.dispatch(&mut self.shared);
+        devices_changed || self.shared.events.len() > before
     }
 
     pub(crate) fn take_events(&mut self) -> Vec<egui::Event> {
         std::mem::take(&mut self.shared.events)
     }
 
-    /// Picks up text egui copied, for later pastes.
-    pub(crate) fn handle_output(&mut self, output: &egui::PlatformOutput) {
+    /// Lets the on-screen keyboard take its input out of `raw_input.events` (turning taps into
+    /// typing) and reserve its space with the bottom safe-area inset.
+    pub(crate) fn prepare_raw_input(&mut self, _raw_input: &mut egui::RawInput) {
+        #[cfg(feature = "osk")]
+        {
+            let raw_input = _raw_input;
+            let screen = raw_input.screen_rect.unwrap_or(egui::Rect::ZERO).size();
+            let time = raw_input.time.unwrap_or(0.0);
+            raw_input.events = self
+                .osk
+                .filter(std::mem::take(&mut raw_input.events), screen, time);
+            // Always `Some`: egui keeps the last insets it was given.
+            raw_input.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+                bottom: self.osk.inset(screen),
+                ..Default::default()
+            }));
+        }
+    }
+
+    /// Picks up text egui copied, for later pastes, and shows or hides the on-screen keyboard.
+    /// Returns true if another pass is needed (the keyboard appeared or went away).
+    pub(crate) fn handle_output(&mut self, output: &egui::PlatformOutput) -> bool {
         for command in &output.commands {
             if let egui::OutputCommand::CopyText(text) = command {
                 self.shared.clipboard.clone_from(text);
             }
         }
+        #[cfg(feature = "osk")]
+        {
+            let changed = self
+                .osk
+                .update(output.ime.is_some(), self.devices.has_keyboard());
+            if changed {
+                log::debug!(
+                    "On-screen keyboard {}",
+                    if self.osk.is_visible() {
+                        "shown"
+                    } else {
+                        "hidden"
+                    }
+                );
+            }
+            changed
+        }
+        #[cfg(not(feature = "osk"))]
+        false
+    }
+
+    /// Draws the on-screen keyboard while it is shown.
+    pub(crate) fn paint_osk(&self, _ctx: &egui::Context) {
+        #[cfg(feature = "osk")]
+        self.osk.paint(_ctx);
     }
 
     /// Draws an arrow cursor on top of everything while a mouse is in use.

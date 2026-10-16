@@ -67,6 +67,7 @@
 //! | `EBOARD_VSYNC` | `0` | async page flips / no `FBIO_WAITFORVSYNC` |
 //! | `EBOARD_BLANK_AFTER` | `300` | power the display down after N s without input (`0` = off) |
 //! | `EBOARD_BACKLIGHT` | `panel_backlight@1` | device in `/sys/class/backlight` |
+//! | `EBOARD_OSK` | `off` | on-screen keyboard (`off`, `auto`, `always`; feature `osk`) |
 //! | `EBOARD_PERSISTENCE_PATH` | `/var/lib/app/state.ron` | state file (feature `persistence`) |
 //!
 //! # Persistence
@@ -113,7 +114,7 @@ pub use egui_glow::glow;
 pub use app::{App, CreationContext, Frame, ScreenInfo};
 pub use error::Error;
 pub use geometry::{Rotation, TouchTransform, pixels_per_point_from_size};
-pub use options::{Backend, InputGrab, InputOptions, ModeRequest, Options, OutputConfig};
+pub use options::{Backend, InputGrab, InputOptions, ModeRequest, Options, OskMode, OutputConfig};
 #[cfg(feature = "persistence")]
 pub use storage::{APP_KEY, Storage, get_value, set_value};
 

@@ -77,6 +77,33 @@ impl FromStr for InputGrab {
     }
 }
 
+/// When to show the on-screen keyboard (feature `osk`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OskMode {
+    /// Never.
+    Off,
+    /// While a text field has the focus and no hardware keyboard is attached.
+    #[default]
+    Auto,
+    /// While a text field has the focus, even with a hardware keyboard.
+    Always,
+}
+
+impl FromStr for OskMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "0" | "false" | "no" => Ok(Self::Off),
+            "auto" => Ok(Self::Auto),
+            "always" | "on" | "1" | "true" | "yes" => Ok(Self::Always),
+            other => Err(format!(
+                "unknown on-screen keyboard mode {other:?} (expected off, auto or always)"
+            )),
+        }
+    }
+}
+
 /// A requested display mode. Unset fields match anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModeRequest {
@@ -265,6 +292,10 @@ pub struct InputOptions {
 
     /// Draw a mouse cursor when a mouse is used (there is no compositor to draw one).
     pub show_cursor: bool,
+
+    /// On-screen keyboard for touch-only devices (feature `osk`). Env: `EBOARD_OSK` (`off`,
+    /// `auto`, `always`).
+    pub osk: OskMode,
 }
 
 impl Default for InputOptions {
@@ -274,6 +305,7 @@ impl Default for InputOptions {
             grab: InputGrab::Keyboards,
             touch_transform: TouchTransform::default(),
             show_cursor: true,
+            osk: OskMode::Auto,
         }
     }
 }
@@ -380,6 +412,9 @@ impl Options {
         if let Some(v) = var("EBOARD_TOUCH_TRANSFORM") {
             self.input.touch_transform = parse("EBOARD_TOUCH_TRANSFORM", &v)?;
         }
+        if let Some(v) = var("EBOARD_OSK") {
+            self.input.osk = parse("EBOARD_OSK", &v)?;
+        }
         #[cfg(feature = "persistence")]
         if let Some(v) = var("EBOARD_PERSISTENCE_PATH") {
             self.persistence_path = Some(PathBuf::from(v));
@@ -424,6 +459,7 @@ mod tests {
             ("EBOARD_TOUCH_TRANSFORM", "invy"),
             ("EBOARD_BACKLIGHT", "panel_backlight@1"),
             ("EBOARD_BLANK_AFTER", "300"),
+            ("EBOARD_OSK", "always"),
         ])
         .unwrap();
         assert_eq!(o.backend, Backend::Kms);
@@ -447,6 +483,7 @@ mod tests {
         assert!(o.input.touch_transform.invert_y);
         assert_eq!(o.output.backlight.as_deref(), Some("panel_backlight@1"));
         assert_eq!(o.blank_after, Some(Duration::from_secs(300)));
+        assert_eq!(o.input.osk, OskMode::Always);
     }
 
     #[test]
@@ -495,6 +532,11 @@ mod tests {
         assert!(with_env(&[("EBOARD_KMS_MODE", "big")]).is_err());
         assert!(with_env(&[("EBOARD_PPP", "-1")]).is_err());
         assert!(with_env(&[("EBOARD_VSYNC", "maybe")]).is_err());
+        assert!(with_env(&[("EBOARD_OSK", "sometimes")]).is_err());
+        assert_eq!(
+            with_env(&[("EBOARD_OSK", "0")]).unwrap().input.osk,
+            OskMode::Off
+        );
     }
 
     #[test]

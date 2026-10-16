@@ -19,6 +19,9 @@ struct Device {
     path: PathBuf,
     raw: RawDevice,
     decoders: Vec<Decoder>,
+    /// Has letter keys (not just a remote control or HDMI-CEC keypad).
+    #[cfg_attr(not(feature = "osk"), allow(dead_code))]
+    typing_keyboard: bool,
 }
 
 pub(crate) struct InputDevices {
@@ -80,6 +83,9 @@ impl InputDevices {
         set_nonblocking(raw.as_fd())?;
         let name = raw.name().unwrap_or("unnamed").to_owned();
         let decoders = decoders_for(&raw, self.next_id, &self.options);
+        let has_key = |k: KeyCode| raw.supported_keys().is_some_and(|s| s.contains(k));
+        let typing_keyboard =
+            has_key(KeyCode::KEY_A) && has_key(KeyCode::KEY_Z) && has_key(KeyCode::KEY_SPACE);
         self.next_id += 1;
         if decoders.is_empty() {
             log::debug!("{}: {name}: not an input device we use", path.display());
@@ -106,8 +112,15 @@ impl InputDevices {
             path: path.to_owned(),
             raw,
             decoders,
+            typing_keyboard,
         });
         Ok(())
+    }
+
+    /// Whether a keyboard you can type on is attached.
+    #[cfg_attr(not(feature = "osk"), allow(dead_code))]
+    pub(crate) fn has_keyboard(&self) -> bool {
+        self.devices.iter().any(|d| d.typing_keyboard)
     }
 
     /// File descriptors to poll for readability.
@@ -118,9 +131,12 @@ impl InputDevices {
             .chain(self.devices.iter().map(|d| d.raw.as_fd()))
     }
 
-    /// Reads everything pending from all devices (non-blocking).
-    pub(crate) fn dispatch(&mut self, shared: &mut Shared) {
+    /// Reads everything pending from all devices (non-blocking). Returns true if devices were
+    /// added or removed.
+    pub(crate) fn dispatch(&mut self, shared: &mut Shared) -> bool {
+        let count = self.devices.len();
         self.handle_hotplug();
+        let added = self.devices.len() != count;
 
         let mut removed = Vec::new();
         for (index, device) in self.devices.iter_mut().enumerate() {
@@ -153,11 +169,13 @@ impl InputDevices {
                 }
             }
         }
+        let changed = added || !removed.is_empty();
         for index in removed.into_iter().rev() {
             self.devices.remove(index);
             // A touch or button may have been held when the device went away.
             shared.events.push(egui::Event::PointerGone);
         }
+        changed
     }
 
     fn handle_hotplug(&mut self) {

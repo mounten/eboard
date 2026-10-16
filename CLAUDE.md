@@ -66,6 +66,15 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
     `EVIOCGRAB` (keyboards by default, so typing doesn't reach the console/login prompt).
   - `mod.rs`: `Shared` state (rotation, pixels per point, modifiers, mouse cursor, internal
     clipboard) and `Input`, which the runner polls; draws the software mouse cursor.
+  - `osk.rs` (feature `osk`): on-screen keyboard. Not egui widgets (they'd steal the
+    `TextEdit`'s focus): `Osk::filter` consumes pointer/touch gestures that start on it and emits
+    `Event::Text`/`Event::Key` on release over the same key. Shown while `PlatformOutput::ime` is
+    set (`Auto`: only without a typing keyboard, `devices::has_keyboard`, which ignores CEC
+    keypads). Reserves its height as the bottom `safe_area_insets` (always sent, they are sticky).
+    The runner runs `App::ui` in a child `Ui` limited to `ctx.content_rect()` (the root `Ui` is
+    the whole viewport), always, so widget ids don't change. Painted on `Order::Tooltip` with
+    `Painter::new(.., viewport_rect)`; icons are shapes (the arrows aren't in egui's fonts).
+    Layout/hit-test/filter are pure and tested; `osk_snapshot` renders `target/osk_snapshot.png`.
 - `examples/hello.rs`: interactive demo (button, slider, text field, touch markers). It is the
   hardware smoke test; `--animate` repaints every frame.
 - `examples/hud.rs`: overlay HUD on a key color (chroma key for an FPGA/video mixer): key from
@@ -80,7 +89,7 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
   only build-time native dependency is `libgbm` (via `gbm-sys`, `kms` feature only). Keep it that
   way: new link-time C dependencies have to be added to the cross image as well.
 - A binary built with `kms` does not start on boards without `libgbm.so.1`. Build those boards with
-  `--no-default-features --features viv-fb,linuxfb,input-evdev,default_fonts`.
+  `--no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts`.
 - Binaries must keep running on **glibc 2.31** (JetPack 5, Pi OS Bullseye, older Yocto). Don't
   switch the cross image to a newer base.
 - `drm` must stay on the version `gbm` uses (currently 0.14).
@@ -100,6 +109,7 @@ Host (Windows):
 cargo test                                   # unit tests, including the software rasterizer
 cargo test --features persistence
 cargo test soft_snapshot -- --ignored        # renders target/soft_snapshot.png for a visual check
+cargo test osk_snapshot -- --ignored         # renders target/osk_snapshot.png (on-screen keyboard)
 cargo clippy --target aarch64-unknown-linux-gnu --all-targets
 cargo clippy --target armv7-unknown-linux-gnueabihf --all-targets
 cargo clippy --target armv7-unknown-linux-gnueabihf --no-default-features --features viv-fb,linuxfb,input-evdev --all-targets
@@ -113,7 +123,7 @@ Cross builds use cross-rs with Podman (`podman machine start` if it is stopped).
 cross build --release --target aarch64-unknown-linux-gnu --example hello
 cross build --release --target armv7-unknown-linux-gnueabihf --example hello
 # i.MX6 without KMS/GBM: Vivante fbdev EGL or CPU framebuffer, no libgbm needed on the board
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features viv-fb,linuxfb,input-evdev,default_fonts
+cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
 cross build --release --target x86_64-unknown-linux-gnu --example hello
 cross test --target x86_64-unknown-linux-gnu   # run the tests on Linux (the image has libgbm)
 ```
@@ -158,6 +168,10 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 - Idle blanking + backlight are done and verified on the Pi 5 with `kms` and `linuxfb`: DPMS goes
   off (backlight too), ~0% CPU while dark, the waking tap doesn't click, brightness slider writes
   sysfs. linuxfb copies the whole canvas after unblanking (fbcon may have drawn over it).
+- On-screen keyboard is done and verified on the Pi 5 (linuxfb captures; kms sanity run): shows
+  on focus, types with shift, Enter hides it, `Auto` hides it while `uinput_kbdmouse.py` is
+  attached and shows it again on unplug, works at `EBOARD_ROTATION=90`. Not done: backspace
+  auto-repeat (needs a timer), other layouts.
 - Input not done yet: keyboard layouts other than US (xkbcommon), touchpads, tslib calibration,
   hardware cursor plane, key repeat settings.
 - Later: GLES2 32-bit index workaround (i.MX6DL/S GC880 without `GL_OES_element_index_uint`), phase 4 extras (wgpu + `VK_KHR_display`, EGLDevice, multi-output).

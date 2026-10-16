@@ -36,8 +36,8 @@ Raspberry Pi 5 with the Touch Display 2.
 | `viv-fb` | `viv-fb` (default) | OpenGL ES 2/3 (`egui_glow`) via Vivante's fbdev EGL on `/dev/fbN` | i.MX6 BSPs with the Vivante GPU driver but no KMS/GBM (like Qt's `eglfs_viv`) |
 | `linuxfb` | `linuxfb` (default) | CPU (built-in software rasterizer) | `/dev/fbN` without GPU/KMS drivers, e.g. i.MX6 BSPs |
 
-Input is the separate `input-evdev` feature (default), `default_fonts` (default) bundles
-egui's fonts, and `persistence` saves app state between runs.
+Input is the separate `input-evdev` feature (default), `osk` (default) adds an on-screen keyboard,
+`default_fonts` (default) bundles egui's fonts, and `persistence` saves app state between runs.
 
 The backend is picked at runtime. `auto` (default) tries `kms` first, then `viv-fb`, then
 `linuxfb`.
@@ -67,6 +67,12 @@ automatically.
   app with an internal clipboard.
 - Keyboards are grabbed by default (`EVIOCGRAB`), so typing doesn't also go to the text console
   behind the app (e.g. a login prompt). Ctrl+C on that keyboard then doesn't stop the app.
+- **On-screen keyboard** (`osk` feature, default): on touch-only devices a keyboard slides in at
+  the bottom while a text field has the focus, and panels lay out above it (it is reported as the
+  bottom safe-area inset, `ctx.content_rect()`). US letters with shift (double tap locks caps), a
+  `?123` symbols page, backspace, enter and a hide key. Enter in a single-line field and the hide
+  key drop the focus, which hides the keyboard. By default (`input.osk = auto`) it only appears
+  while no hardware keyboard is attached; `always` shows it anyway, `off` never.
 
 ## Screen blanking and backlight
 
@@ -133,7 +139,7 @@ The file is `persistence_path` if set, else `$STATE_DIRECTORY/app.ron` (systemd
 default features, keep the ones you need, and install the fonts when the app is created:
 
 ```toml
-eboard = { version = "0.1", default-features = false, features = ["kms", "viv-fb", "linuxfb", "input-evdev"] }
+eboard = { version = "0.1", default-features = false, features = ["kms", "viv-fb", "linuxfb", "input-evdev", "osk"] }
 ```
 
 ```rust
@@ -177,6 +183,7 @@ variable, so a deployed binary can be reconfigured without rebuilding.
 | `input.grab` | `EBOARD_INPUT_GRAB` | `none`, `keyboards`, `all` | Exclusive access (default `keyboards`) |
 | `input.touch_transform` | `EBOARD_TOUCH_TRANSFORM` | `swapxy,invx,invy` | Fix touch axes that don't match the panel |
 | `input.show_cursor` | – | `false` | Draw a mouse cursor while a mouse is used (default on) |
+| `input.osk` | `EBOARD_OSK` | `off`, `auto`, `always` | On-screen keyboard (feature `osk`, default `auto`: only without a hardware keyboard) |
 | `blank_after` | `EBOARD_BLANK_AFTER` | `300` | Power the display down after this many seconds without input (default off, `0` = off) |
 | `persistence_path` | `EBOARD_PERSISTENCE_PATH` | `/var/lib/myapp/state.ron` | State file (feature `persistence`, see above) |
 
@@ -220,7 +227,7 @@ cross build --release --target aarch64-unknown-linux-gnu --example hello
 # 32-bit ARM
 cross build --release --target armv7-unknown-linux-gnueabihf --example hello
 # Boards without libgbm (e.g. i.MX6 with the Vivante fbdev BSP): Vivante GPU or CPU on /dev/fbN
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features viv-fb,linuxfb,input-evdev,default_fonts
+cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
 # Intel/AMD boards and industrial PCs
 cross build --release --target x86_64-unknown-linux-gnu --example hello
 ```
@@ -248,7 +255,7 @@ EBOARD_BACKEND=linuxfb RUST_LOG=info ./hello
 
 ## Roadmap
 
-- Keyboard layouts via xkbcommon, touchpads, hardware cursor
+- Keyboard layouts via xkbcommon (also for the on-screen keyboard), touchpads, hardware cursor
 - wgpu + Vulkan `VK_KHR_display`, EGLDevice for old Jetson releases, multiple outputs
 
 ## Contributing

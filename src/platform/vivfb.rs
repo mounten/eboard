@@ -26,6 +26,11 @@ use crate::{Error, Options, Rotation};
 
 const LIBEGL: &str = "libEGL.so.1";
 
+/// Fraction of the frame period used as the minimum frame interval while `eglSwapBuffers` blocks
+/// on vblank. Shorter than a period, so a refresh rate computed slightly too low cannot make
+/// frame starts drift past vblank and drop a frame every few seconds; the swap does the pacing.
+const BLOCKING_SWAP_INTERVAL: f32 = 0.9;
+
 // Signatures from Vivante's `EGL/eglvivante.h` (`EGL_API_FB`).
 type FbGetDisplayByIndex = unsafe extern "C" fn(c_int) -> *mut c_void;
 type FbGetDisplayInfo =
@@ -101,6 +106,8 @@ pub(crate) struct VivFbPlatform {
     panel_size: [u32; 2],
     physical_size_mm: Option<[u32; 2]>,
     refresh_hz: f32,
+    /// `eglSwapBuffers` waits for vblank (double-buffered with vsync).
+    swap_blocks: bool,
     _vt: Option<vt::VtGuard>,
 }
 
@@ -153,6 +160,7 @@ impl VivFbPlatform {
             panel_size: [0, 0],
             physical_size_mm: None,
             refresh_hz: 60.0,
+            swap_blocks: false,
             _vt: None,
         };
 
@@ -196,7 +204,9 @@ impl VivFbPlatform {
             this.physical_size_mm
                 .map_or("unknown".to_owned(), |[w, h]| format!("{w}x{h} mm")),
         );
-        if multi_buffer >= 2 && var.yres_virtual < var.yres.saturating_mul(multi_buffer) {
+        let enough_pages = var.yres_virtual >= var.yres.saturating_mul(multi_buffer);
+        this.swap_blocks = options.vsync && multi_buffer >= 2 && enough_pages;
+        if multi_buffer >= 2 && !enough_pages {
             log::warn!(
                 "{} has {} lines of virtual space, FB_MULTI_BUFFER={multi_buffer} needs {}: the \
                  driver may fall back to a single buffer (tearing). Reserve more framebuffer \
@@ -300,10 +310,15 @@ impl Platform for VivFbPlatform {
             .swap_buffers()
     }
 
-    /// Safety net in case `eglSwapBuffers` does not block (single buffer or vsync off), so
-    /// animations do not spin.
+    /// Paces animations when `eglSwapBuffers` does not block (single buffer or vsync off). When
+    /// it does, this is only a safety net and stays below one frame period.
     fn frame_interval(&self) -> Option<Duration> {
-        Some(Duration::from_secs_f32(1.0 / self.refresh_hz))
+        let fraction = if self.swap_blocks {
+            BLOCKING_SWAP_INTERVAL
+        } else {
+            1.0
+        };
+        Some(Duration::from_secs_f32(fraction / self.refresh_hz))
     }
 
     fn event_fd(&self) -> Option<BorrowedFd<'_>> {

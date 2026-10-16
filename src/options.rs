@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::{Error, Rotation, TouchTransform, geometry::parse_size};
@@ -7,11 +7,15 @@ use crate::{Error, Rotation, TouchTransform, geometry::parse_size};
 /// `EBOARD_BACKEND`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Backend {
-    /// Try every compiled-in backend in order: `kms`, then `linuxfb`.
+    /// Try every compiled-in backend in order: `kms`, `viv-fb`, then `linuxfb`.
     #[default]
     Auto,
     /// DRM/KMS + GBM + EGL, rendered with OpenGL ES (feature `kms`).
     Kms,
+    /// Vivante GPU on the Linux framebuffer: NXP's EGL for fbdev (`fbGetDisplayByIndex`),
+    /// rendered with OpenGL ES (feature `viv-fb`). Like Qt's `eglfs_viv`, for i.MX6 BSPs that
+    /// ship the Vivante driver without KMS/GBM.
+    VivFb,
     /// Linux framebuffer (`/dev/fbN`), rendered on the CPU (feature `linuxfb`). Like Qt's
     /// `linuxfb`: works without GPU drivers, e.g. on i.MX6 BSPs without KMS/GBM.
     LinuxFb,
@@ -24,12 +28,23 @@ impl FromStr for Backend {
         match s.trim().to_ascii_lowercase().as_str() {
             "" | "auto" => Ok(Self::Auto),
             "kms" | "drm" | "gbm" => Ok(Self::Kms),
+            "viv-fb" | "vivfb" | "viv" => Ok(Self::VivFb),
             "linuxfb" | "fb" | "fbdev" => Ok(Self::LinuxFb),
             other => Err(format!(
-                "unknown backend {other:?} (expected auto, kms or linuxfb)"
+                "unknown backend {other:?} (expected auto, kms, viv-fb or linuxfb)"
             )),
         }
     }
+}
+
+/// The `N` of a `/dev/fbN` path, e.g. for Vivante's `fbGetDisplayByIndex`.
+#[cfg_attr(not(feature = "viv-fb"), allow(dead_code))]
+pub(crate) fn fb_index(path: &Path) -> Option<i32> {
+    let digits = path.file_name()?.to_str()?.strip_prefix("fb")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// Which input devices to open exclusively (`EVIOCGRAB`). Grabbed devices deliver events only to
@@ -149,7 +164,7 @@ pub struct OutputConfig {
     /// devices (Raspberry Pi 4/5, i.MX8, Jetson). Env: `EBOARD_KMS_DEVICE`.
     pub device: Option<PathBuf>,
 
-    /// Framebuffer device for the `linuxfb` backend. Default: `/dev/fb0`.
+    /// Framebuffer device for the `linuxfb` and `viv-fb` backends. Default: `/dev/fb0`.
     /// Env: `EBOARD_FB_DEVICE`.
     pub fb_device: Option<PathBuf>,
 
@@ -181,15 +196,16 @@ pub struct OutputConfig {
 /// deployed binary can be reconfigured without rebuilding (like Qt's `QT_QPA_EGLFS_*`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
-    /// Env: `EBOARD_BACKEND` (`auto`, `kms`, `linuxfb`).
+    /// Env: `EBOARD_BACKEND` (`auto`, `kms`, `viv-fb`, `linuxfb`).
     pub backend: Backend,
 
     pub output: OutputConfig,
 
     /// Wait for vertical blank before showing a frame (no tearing). If `false`, page flips are
-    /// asynchronous where the driver supports it. With `linuxfb`, the copy to the framebuffer
-    /// waits for vblank if the driver supports `FBIO_WAITFORVSYNC`. Env: `EBOARD_VSYNC`
-    /// (`0`/`1`).
+    /// asynchronous where the driver supports it. With `viv-fb`, `FB_MULTI_BUFFER=2` is set
+    /// (unless already set) for double buffering, and off means `eglSwapInterval(0)`. With
+    /// `linuxfb`, the copy to the framebuffer waits for vblank if the driver supports
+    /// `FBIO_WAITFORVSYNC`. Env: `EBOARD_VSYNC` (`0`/`1`).
     pub vsync: bool,
 
     /// Number of MSAA samples requested from EGL (0 = off). egui does its own anti-aliasing
@@ -405,10 +421,45 @@ mod tests {
             with_env(&[("EBOARD_BACKEND", "fbdev")]).unwrap().backend,
             Backend::LinuxFb
         );
+        assert_eq!(
+            with_env(&[("EBOARD_BACKEND", "viv-fb")]).unwrap().backend,
+            Backend::VivFb
+        );
         assert!(with_env(&[("EBOARD_ROTATION", "45")]).is_err());
         assert!(with_env(&[("EBOARD_KMS_MODE", "big")]).is_err());
         assert!(with_env(&[("EBOARD_PPP", "-1")]).is_err());
         assert!(with_env(&[("EBOARD_VSYNC", "maybe")]).is_err());
+    }
+
+    #[test]
+    fn backend_names() {
+        for (name, backend) in [
+            ("auto", Backend::Auto),
+            ("", Backend::Auto),
+            ("kms", Backend::Kms),
+            ("viv-fb", Backend::VivFb),
+            ("VivFB", Backend::VivFb),
+            ("viv", Backend::VivFb),
+            ("linuxfb", Backend::LinuxFb),
+        ] {
+            assert_eq!(name.parse(), Ok(backend), "{name:?}");
+        }
+        assert!("vivante".parse::<Backend>().is_err());
+    }
+
+    #[test]
+    fn fb_indices() {
+        let index = |p: &str| fb_index(Path::new(p));
+        assert_eq!(index("/dev/fb0"), Some(0));
+        assert_eq!(index("/dev/fb1"), Some(1));
+        assert_eq!(index("/dev/graphics/fb12"), Some(12));
+        assert_eq!(index("fb2"), Some(2));
+        assert_eq!(index("/dev/fb"), None);
+        assert_eq!(index("/dev/fb+1"), None);
+        assert_eq!(index("/dev/fbx"), None);
+        assert_eq!(index("/dev/dri/card0"), None);
+        assert_eq!(index("/dev/fb0/"), Some(0));
+        assert_eq!(index("/"), None);
     }
 
     fn mode(width: u32, height: u32, refresh_hz: f32, preferred: bool) -> ModeCandidate {

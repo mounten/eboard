@@ -3,6 +3,8 @@
 //!
 //! Backends (cargo features, picked at runtime with [`Backend`]):
 //! - `kms`: DRM/KMS + GBM + EGL, painted with OpenGL ES (`egui_glow`).
+//! - `viv-fb`: Vivante GPU on `/dev/fbN` through NXP's fbdev EGL, painted with OpenGL ES. For
+//!   i.MX6 BSPs without KMS/GBM (like Qt's `eglfs_viv`).
 //! - `linuxfb`: `/dev/fbN`, painted on the CPU. For boards without KMS/GBM or GPU drivers.
 //!
 //! The API mirrors eframe:
@@ -54,9 +56,9 @@
 //!
 //! | Variable | Example | |
 //! |---|---|---|
-//! | `EBOARD_BACKEND` | `kms` | backend (`auto`, `kms`, `linuxfb`) |
+//! | `EBOARD_BACKEND` | `kms` | backend (`auto`, `kms`, `viv-fb`, `linuxfb`) |
 //! | `EBOARD_KMS_DEVICE` | `/dev/dri/card1` | DRM device |
-//! | `EBOARD_FB_DEVICE` | `/dev/fb1` | framebuffer device (default `/dev/fb0`) |
+//! | `EBOARD_FB_DEVICE` | `/dev/fb1` | framebuffer device for `viv-fb`/`linuxfb` (default `/dev/fb0`) |
 //! | `EBOARD_KMS_CONNECTOR` | `DSI-1`, `HDMI-A-1` | output |
 //! | `EBOARD_KMS_MODE` | `1280x720@60` | display mode |
 //! | `EBOARD_ROTATION` | `90` | clockwise UI rotation (0, 90, 180, 270) |
@@ -71,7 +73,7 @@
 #![cfg_attr(
     any(
         not(target_os = "linux"),
-        not(any(feature = "kms", feature = "linuxfb"))
+        not(any(feature = "kms", feature = "viv-fb", feature = "linuxfb"))
     ),
     allow(dead_code)
 )]
@@ -129,6 +131,8 @@ mod backends {
         match options.backend {
             #[cfg(feature = "kms")]
             Backend::Kms => run_on(platform::kms::open(options)?, options, app_creator),
+            #[cfg(feature = "viv-fb")]
+            Backend::VivFb => run_on(platform::vivfb::open(options)?, options, app_creator),
             #[cfg(feature = "linuxfb")]
             Backend::LinuxFb => run_on(platform::linuxfb::open(options)?, options, app_creator),
             Backend::Auto => {
@@ -142,6 +146,14 @@ mod backends {
                         failures.push(format!("kms: {e}"));
                     }
                 }
+                #[cfg(feature = "viv-fb")]
+                match platform::vivfb::open(options) {
+                    Ok(started) => return run_on(started, options, app_creator),
+                    Err(e) => {
+                        log::info!("viv-fb backend unavailable: {e}");
+                        failures.push(format!("viv-fb: {e}"));
+                    }
+                }
                 #[cfg(feature = "linuxfb")]
                 match platform::linuxfb::open(options) {
                     Ok(started) => return run_on(started, options, app_creator),
@@ -151,7 +163,9 @@ mod backends {
                     }
                 }
                 if failures.is_empty() {
-                    failures.push("no backend compiled in (enable `kms` or `linuxfb`)".into());
+                    failures.push(
+                        "no backend compiled in (enable `kms`, `viv-fb` or `linuxfb`)".into(),
+                    );
                 }
                 drop(app_creator);
                 Err(Error::NoBackend(failures.join("; ")))

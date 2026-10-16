@@ -26,8 +26,9 @@ jobs:
       - run: cargo clippy --all-targets
       - run: cargo clippy --all-targets --target aarch64-unknown-linux-gnu
       - run: cargo clippy --all-targets --target armv7-unknown-linux-gnueabihf
-      # Feature combinations: framebuffer only (i.MX6 BSPs), KMS only, nothing.
-      - run: cargo clippy --all-targets --target armv7-unknown-linux-gnueabihf --no-default-features --features linuxfb,input-evdev
+      # Feature combinations: no libgbm (i.MX6 BSPs), Vivante fbdev only, KMS only, nothing.
+      - run: cargo clippy --all-targets --target armv7-unknown-linux-gnueabihf --no-default-features --features viv-fb,linuxfb,input-evdev
+      - run: cargo clippy --all-targets --target armv7-unknown-linux-gnueabihf --no-default-features --features viv-fb
       - run: cargo clippy --all-targets --no-default-features --features kms
       - run: cargo clippy --all-targets --no-default-features
       - run: cargo test

@@ -4,6 +4,8 @@
 //! RUST_LOG=info cargo run --release --example hello
 //! # Raspberry Pi Touch Display 2 mounted in landscape:
 //! EBOARD_ROTATION=90 RUST_LOG=info cargo run --release --example hello
+//! # Vivante GPU on /dev/fb0 (i.MX6 BSPs without KMS/GBM):
+//! EBOARD_BACKEND=viv-fb RUST_LOG=info cargo run --release --example hello
 //! # CPU rendering to /dev/fb0 (no GPU needed):
 //! EBOARD_BACKEND=linuxfb RUST_LOG=info cargo run --release --example hello
 //! ```

@@ -29,17 +29,22 @@ Raspberry Pi 5 with the Touch Display 2.
 | Backend | Cargo feature | Renders with | Use for |
 |---|---|---|---|
 | `kms` | `kms` (default) | OpenGL ES 2/3 (`egui_glow`) via DRM/KMS + GBM + EGL | Mesa GPUs (Raspberry Pi, i.MX8 etnaviv, ...), NVIDIA Jetson (NVGBM) |
+| `viv-fb` | `viv-fb` (default) | OpenGL ES 2/3 (`egui_glow`) via Vivante's fbdev EGL on `/dev/fbN` | i.MX6 BSPs with the Vivante GPU driver but no KMS/GBM (like Qt's `eglfs_viv`) |
 | `linuxfb` | `linuxfb` (default) | CPU (built-in software rasterizer) | `/dev/fbN` without GPU/KMS drivers, e.g. i.MX6 BSPs |
 
 Input is the separate `input-evdev` feature (default), and `default_fonts` (default) bundles
 egui's fonts.
 
-The backend is picked at runtime. `auto` (default) tries `kms` first, then `linuxfb`.
+The backend is picked at runtime. `auto` (default) tries `kms` first, then `viv-fb`, then
+`linuxfb`.
 
 - The UI only repaints when something changes (input, animation, `request_repaint`), so idle CPU
   stays near 0%.
 - `kms` uses vsync via page flips. It picks the DRM device that has a connected display, which
   matters on SoCs where the GPU and the display controller are separate devices.
+- `viv-fb` sets `FB_MULTI_BUFFER=2` (unless it is already set) for double buffering with vsync,
+  like Qt does. That needs a framebuffer with at least twice the screen height of virtual space;
+  eboard warns if it is smaller.
 - `linuxfb` copies only the changed area to the framebuffer and supports 16/24/32 bpp formats.
 - SIGINT/SIGTERM exit cleanly: `App::on_exit` is called and the display/console is restored.
 
@@ -64,7 +69,7 @@ automatically.
 default features, keep the ones you need, and install the fonts when the app is created:
 
 ```toml
-eboard = { version = "0.1", default-features = false, features = ["kms", "linuxfb", "input-evdev"] }
+eboard = { version = "0.1", default-features = false, features = ["kms", "viv-fb", "linuxfb", "input-evdev"] }
 ```
 
 ```rust
@@ -90,18 +95,18 @@ variable, so a deployed binary can be reconfigured without rebuilding.
 
 | `Options` field | Environment variable | Example | Meaning |
 |---|---|---|---|
-| `backend` | `EBOARD_BACKEND` | `kms`, `linuxfb` | Backend (`auto` by default) |
+| `backend` | `EBOARD_BACKEND` | `kms`, `viv-fb`, `linuxfb` | Backend (`auto` by default) |
 | `output.device` | `EBOARD_KMS_DEVICE` | `/dev/dri/card1` | DRM device (default: first one with a connected display) |
 | `output.connector` | `EBOARD_KMS_CONNECTOR` | `DSI-1`, `HDMI-A-1` | Output (default: first connected) |
 | `output.mode` | `EBOARD_KMS_MODE` | `1280x720@60` | Display mode (default: preferred mode) |
-| `output.fb_device` | `EBOARD_FB_DEVICE` | `/dev/fb1` | Framebuffer for `linuxfb` (default `/dev/fb0`) |
+| `output.fb_device` | `EBOARD_FB_DEVICE` | `/dev/fb1` | Framebuffer for `viv-fb` and `linuxfb` (default `/dev/fb0`) |
 | `output.rotation` | `EBOARD_ROTATION` | `90` | Rotate the UI clockwise: `0`, `90`, `180`, `270` |
 | `output.physical_size_mm` | `EBOARD_PHYSICAL_SIZE` | `155x88` | Panel size in mm, used for the scale factor |
 | `output.pixels_per_point` | `EBOARD_PPP` | `1.5` | Fixed scale factor (default: from the panel's pixel density, 160 dpi = 1.0) |
 | `vsync` | `EBOARD_VSYNC` | `0` | Wait for vblank (default on) |
-| `multisampling` | – | `4` | MSAA samples (`kms` only, default 0) |
-| `dithering` | – | `false` | Dithering in the GL shader (`kms` only, default on) |
-| `shader_version` | – | | Force a GLSL version (`kms` only) |
+| `multisampling` | – | `4` | MSAA samples (GL backends `kms`/`viv-fb`, default 0) |
+| `dithering` | – | `false` | Dithering in the GL shader (`kms`/`viv-fb`, default on) |
+| `shader_version` | – | | Force a GLSL version (`kms`/`viv-fb`) |
 | `handle_signals` | – | `false` | Install SIGINT/SIGTERM handlers (default on) |
 | `input.enabled` | `EBOARD_INPUT` | `0` | Read input devices (default on) |
 | `input.grab` | `EBOARD_INPUT_GRAB` | `none`, `keyboards`, `all` | Exclusive access (default `keyboards`) |
@@ -109,8 +114,8 @@ variable, so a deployed binary can be reconfigured without rebuilding.
 | `input.show_cursor` | – | `false` | Draw a mouse cursor while a mouse is used (default on) |
 
 Rotation: `90` turns a native portrait panel (e.g. 720×1280) into a landscape UI (1280×720).
-`kms` lets the display controller do 180° if it can and does everything else on the GPU; `linuxfb`
-rotates while copying.
+`kms` lets the display controller do 180° if it can and does everything else on the GPU, `viv-fb`
+rotates on the GPU, and `linuxfb` rotates while copying.
 
 Set `RUST_LOG=info` (or `debug`) with a logger such as `env_logger` to see the chosen device,
 mode, pixel format and GPU.
@@ -136,7 +141,8 @@ so:
 ## Building
 
 The crate targets `*-linux-gnu` (vendor GPU libraries are glibc-linked). EGL and GLES are loaded at
-runtime with `dlopen`; the only library linked at build time is `libgbm` (`kms` feature).
+runtime with `dlopen` (including Vivante's fbdev functions for `viv-fb`); the only library linked at
+build time is `libgbm` (`kms` feature).
 
 Cross-compiling with [cross](https://github.com/cross-rs/cross) (Docker or Podman). The image in
 `docker/` is based on Ubuntu 20.04 so the binaries run on glibc 2.31 and newer:
@@ -146,8 +152,8 @@ Cross-compiling with [cross](https://github.com/cross-rs/cross) (Docker or Podma
 cross build --release --target aarch64-unknown-linux-gnu --example hello
 # 32-bit ARM
 cross build --release --target armv7-unknown-linux-gnueabihf --example hello
-# Boards without libgbm (e.g. i.MX6 with the Vivante fbdev BSP): framebuffer only
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features linuxfb,input-evdev,default_fonts
+# Boards without libgbm (e.g. i.MX6 with the Vivante fbdev BSP): Vivante GPU or CPU on /dev/fbN
+cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features viv-fb,linuxfb,input-evdev,default_fonts
 # Intel/AMD boards and industrial PCs
 cross build --release --target x86_64-unknown-linux-gnu --example hello
 ```
@@ -158,24 +164,24 @@ Every GitHub release has the `hello` example for these targets attached, ready t
 
 - Nothing else may own the display: stop the desktop / display manager
   (`sudo systemctl isolate multi-user.target`) and run from the console or over SSH.
-- The user needs the `video` group (`/dev/dri/card*`, `/dev/fb*`), `render` for the GPU and
-  `input` for `/dev/input/event*`.
-- With `linuxfb`, the console is switched to graphics mode so its text and cursor don't draw over
-  the UI. That needs root, or the app running on the console itself (e.g. a systemd service with
-  `TTYPath=`).
+- The user needs the `video` group (`/dev/dri/card*`, `/dev/fb*`, Vivante's `/dev/galcore`),
+  `render` for the GPU and `input` for `/dev/input/event*`.
+- With `viv-fb` and `linuxfb`, the console is switched to graphics mode so its text and cursor
+  don't draw over the UI. That needs root, or the app running on the console itself (e.g. a
+  systemd service with `TTYPath=`).
 
 ```sh
 RUST_LOG=info ./hello                              # interactive demo; Quit button or Ctrl+C
 RUST_LOG=info ./hello --animate                    # repaint every frame
 RUST_LOG=info ./hud                                # overlay HUD on a green key color
 EBOARD_ROTATION=90 RUST_LOG=info ./hello
+EBOARD_BACKEND=viv-fb RUST_LOG=info ./hello      # i.MX6 with the Vivante fbdev driver
 EBOARD_BACKEND=linuxfb RUST_LOG=info ./hello
 ```
 
 ## Roadmap
 
 - Keyboard layouts via xkbcommon, touchpads, hardware cursor
-- `viv-fb`: Vivante GPU on fbdev for i.MX6 BSPs (like Qt's `eglfs_viv`)
 - wgpu + Vulkan `VK_KHR_display`, EGLDevice for old Jetson releases, multiple outputs
 
 ## Contributing

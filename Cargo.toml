@@ -16,7 +16,7 @@ categories = ["gui", "embedded"]
 targets = ["x86_64-unknown-linux-gnu"]
 
 [features]
-default = ["kms", "linuxfb", "input-evdev", "default_fonts"]
+default = ["kms", "viv-fb", "linuxfb", "input-evdev", "default_fonts"]
 
 ## Bundle egui's default fonts (`egui/default_fonts`, about 1 MB). Turn it off if the app installs
 ## its own fonts with `egui::Context::set_fonts`; without any fonts egui draws boxes for text.
@@ -30,6 +30,10 @@ soft = []
 
 ## DRM/KMS + GBM + EGL display backend (Mesa, NVIDIA Jetson NVGBM, i.MX8 Vivante/etnaviv, ...).
 kms = ["glow", "dep:drm", "dep:gbm", "dep:khronos-egl", "dep:libloading"]
+
+## Vivante GPU on the Linux framebuffer through NXP's fbdev EGL (`fbGetDisplayByIndex`), like Qt's
+## eglfs_viv. For i.MX6 BSPs with the Vivante driver but without KMS/GBM. Links no native libraries.
+viv-fb = ["glow", "dep:khronos-egl", "dep:libloading"]
 
 ## Linux framebuffer (/dev/fbN) backend with the CPU renderer, like Qt's linuxfb. Needs no GPU
 ## driver and links no native libraries, e.g. for i.MX6 BSPs without KMS/GBM.

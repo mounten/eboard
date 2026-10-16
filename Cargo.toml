@@ -61,3 +61,8 @@ env_logger = "0.11"
 name = "hello"
 # Without fonts every label would be drawn as boxes.
 required-features = ["default_fonts"]
+
+[[example]]
+name = "hud"
+# Text on the HUD plates needs fonts.
+required-features = ["default_fonts"]

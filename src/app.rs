@@ -20,7 +20,11 @@ pub trait App {
     fn on_exit(&mut self) {}
 
     /// Color the screen is cleared to before egui paints, in gamma space (`[r, g, b, a]`, 0..=1).
-    /// The scanout buffer is opaque, so alpha has no effect on the panel.
+    /// Called every frame. The scanout buffer is opaque, so alpha has no effect on the panel.
+    ///
+    /// Pixels egui does not paint keep exactly this color, e.g. a key color for a video overlay.
+    /// The default central panel covers the screen with `panel_fill`, though; give it
+    /// [`egui::Frame::NONE`] to show the clear color (see `examples/hud.rs`).
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
         visuals.panel_fill.to_normalized_gamma_f32()
     }

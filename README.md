@@ -1,5 +1,9 @@
 # eboard
 
+[![crates.io](https://img.shields.io/crates/v/eboard.svg)](https://crates.io/crates/eboard)
+[![docs.rs](https://docs.rs/eboard/badge.svg)](https://docs.rs/eboard)
+[![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/eboard.svg)](#license)
+
 **eframe for embedded boards.** Run [egui](https://github.com/emilk/egui) apps full-screen on
 embedded Linux **without a compositor, X11/Wayland or winit**, similar to Qt's `eglfs` and `linuxfb`
 platform plugins. The API mirrors [eframe](https://github.com/emilk/egui/tree/main/crates/eframe),

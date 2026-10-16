@@ -24,7 +24,7 @@ use gbm::{AsRaw as _, BufferObject, BufferObjectFlags, Format, Modifier};
 use super::egl::{ConfigRequest, Egl, NativeDisplay, fourcc_name};
 use super::{Platform, Started};
 use crate::options::{ModeCandidate, OutputConfig, select_mode};
-use crate::render::glow::{GlowRenderer, renderer_info};
+use crate::render::glow::GlowRenderer;
 use crate::{Error, Options, Rotation};
 
 /// `EGL_PLATFORM_GBM_KHR` (same value as `EGL_PLATFORM_GBM_MESA`).
@@ -77,29 +77,7 @@ struct PlaneRotation {
 pub(crate) fn open(options: &Options) -> Result<Started<KmsPlatform>, Error> {
     let platform = KmsPlatform::new(options)?;
     let gl = platform.gl();
-
-    // Whatever the display controller does not rotate, the renderer does.
-    let rotation = options.output.rotation;
-    let sw_rotation = if platform.hardware_rotation() == rotation {
-        Rotation::Deg0
-    } else {
-        rotation
-    };
-    let renderer = GlowRenderer::new(
-        gl.clone(),
-        options.shader_version,
-        options.dithering,
-        sw_rotation,
-        platform.panel_size(),
-    )?;
-    let renderer_info = renderer_info(&gl);
-    log::info!("GL: {renderer_info}");
-    Ok(Started {
-        platform,
-        renderer,
-        renderer_info,
-        gl: Some(gl),
-    })
+    super::glow_started(platform, gl, options)
 }
 
 pub(crate) struct KmsPlatform {
@@ -221,6 +199,7 @@ impl KmsPlatform {
                 &ConfigRequest {
                     native_visual_ids: &formats,
                     samples: options.multisampling,
+                    buffer_size: None,
                 },
             )?
         };

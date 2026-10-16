@@ -1,4 +1,5 @@
-//! EGL setup shared by every GL platform (KMS/GBM now; Vivante fbdev and EGLDevice later).
+//! EGL setup shared by every GL platform: KMS/GBM and Vivante fbdev (EGLDevice later). It must
+//! stay free of GBM, so platforms without libgbm can use it.
 //!
 //! libEGL and libGLESv2 are loaded with `dlopen`, so cross builds need no EGL in the sysroot and the
 //! vendor's EGL (Mesa, NVIDIA, Vivante, Mali) is picked up at runtime.
@@ -25,10 +26,15 @@ type CreatePlatformWindowSurfaceExt = unsafe extern "system" fn(
 pub(crate) enum NativeDisplay {
     /// `eglGetPlatformDisplay[EXT](platform, native)`, e.g. `EGL_PLATFORM_GBM_KHR` with a
     /// `gbm_device*`. Falls back to `eglGetDisplay(native)` if the EGL has no platform support.
+    #[cfg_attr(not(feature = "kms"), allow(dead_code))]
     Platform {
         platform: egl::Enum,
         native: *mut c_void,
     },
+    /// Plain `eglGetDisplay(native)`, for EGLs with their own window system, e.g. Vivante's fbdev
+    /// EGL with the display from `fbGetDisplayByIndex`.
+    #[cfg_attr(not(feature = "viv-fb"), allow(dead_code))]
+    Legacy(*mut c_void),
 }
 
 /// Requirements for the EGL config.
@@ -38,6 +44,9 @@ pub(crate) struct ConfigRequest<'a> {
     pub native_visual_ids: &'a [u32],
     /// MSAA samples, 0 = off.
     pub samples: u16,
+    /// Prefer configs with this `EGL_BUFFER_SIZE` (e.g. 16 for an RGB565 framebuffer). Falls back
+    /// to the first matching config.
+    pub buffer_size: Option<i32>,
 }
 
 pub(crate) struct Egl {
@@ -50,6 +59,7 @@ pub(crate) struct Egl {
     platform_display: bool,
     gles_lib: Option<libloading::Library>,
     /// `EGL_NATIVE_VISUAL_ID` of the chosen config.
+    #[cfg_attr(not(feature = "kms"), allow(dead_code))]
     pub(crate) native_visual_id: u32,
     pub(crate) gles_major: i32,
 }
@@ -80,6 +90,11 @@ impl Egl {
             NativeDisplay::Platform { platform, native } => unsafe {
                 get_platform_display(&egl, &client_extensions, platform, native)?
             },
+            NativeDisplay::Legacy(native) => {
+                let display = unsafe { egl.get_display(native) }
+                    .ok_or_else(|| Error::Egl("eglGetDisplay returned EGL_NO_DISPLAY".into()))?;
+                (display, false)
+            }
         };
 
         let (major, minor) = egl
@@ -211,6 +226,23 @@ impl Egl {
         }
     }
 
+    /// Releases the context and destroys the window surface, so the native window can be destroyed
+    /// before the context and display.
+    pub(crate) fn destroy_surface(&mut self) {
+        let _ = self.egl.make_current(self.display, None, None, None);
+        if let Some(surface) = self.surface.take() {
+            let _ = self.egl.destroy_surface(self.display, surface);
+        }
+    }
+
+    /// `eglSwapInterval`: 0 = don't wait for vblank. Needs a current context.
+    #[cfg_attr(not(feature = "viv-fb"), allow(dead_code))]
+    pub(crate) fn set_swap_interval(&self, interval: i32) -> Result<(), Error> {
+        self.egl
+            .swap_interval(self.display, interval)
+            .map_err(|e| egl_err("eglSwapInterval", e))
+    }
+
     pub(crate) fn swap_buffers(&self) -> Result<(), Error> {
         let surface = self
             .surface
@@ -255,10 +287,7 @@ impl Egl {
 
 impl Drop for Egl {
     fn drop(&mut self) {
-        let _ = self.egl.make_current(self.display, None, None, None);
-        if let Some(surface) = self.surface.take() {
-            let _ = self.egl.destroy_surface(self.display, surface);
-        }
+        self.destroy_surface();
         let _ = self.egl.destroy_context(self.display, self.context);
         let _ = self.egl.terminate(self.display);
     }
@@ -337,7 +366,19 @@ fn choose_config(
     };
 
     let chosen = if request.native_visual_ids.is_empty() {
-        configs.first().copied()
+        let buffer_size = |config| {
+            egl.get_config_attrib(display, config, egl::BUFFER_SIZE)
+                .ok()
+        };
+        request
+            .buffer_size
+            .and_then(|size| {
+                configs
+                    .iter()
+                    .copied()
+                    .find(|&c| buffer_size(c) == Some(size))
+            })
+            .or_else(|| configs.first().copied())
     } else {
         request
             .native_visual_ids
@@ -358,11 +399,12 @@ fn choose_config(
 
     let attr = |a| egl.get_config_attrib(display, config, a).unwrap_or(-1);
     log::debug!(
-        "EGL config: R{}G{}B{}A{} depth {} stencil {} samples {} visual {}",
+        "EGL config: R{}G{}B{}A{} (buffer {}) depth {} stencil {} samples {} visual {}",
         attr(egl::RED_SIZE),
         attr(egl::GREEN_SIZE),
         attr(egl::BLUE_SIZE),
         attr(egl::ALPHA_SIZE),
+        attr(egl::BUFFER_SIZE),
         attr(egl::DEPTH_SIZE),
         attr(egl::STENCIL_SIZE),
         attr(egl::SAMPLES),

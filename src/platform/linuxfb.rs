@@ -5,96 +5,23 @@
 //! fbdev driver with packed truecolor pixels (16/24/32 bpp), e.g. the i.MX6 `mxsfb`/`mxc_ipuv3_fb`
 //! BSP drivers or DRM's fbdev emulation.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::os::fd::{AsRawFd as _, BorrowedFd};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use super::fbdev::{self, FbBitfield, fb_err};
 use super::{Platform, Started, vt};
 use crate::render::soft::SoftRenderer;
 use crate::render::soft::blit::{self, Channel, PixelFormat, PixelRect, Target};
 use crate::{Error, Options, Rotation};
 
-const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
-const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
-const FBIOBLANK: libc::c_ulong = 0x4611;
 /// `_IOW('F', 0x20, __u32)`
 const FBIO_WAITFORVSYNC: libc::c_ulong = 0x4004_4620;
 
 const FB_TYPE_PACKED_PIXELS: u32 = 0;
 const FB_VISUAL_TRUECOLOR: u32 = 2;
 const FB_VISUAL_DIRECTCOLOR: u32 = 4;
-const FB_BLANK_UNBLANK: libc::c_int = 0;
-
-/// `struct fb_bitfield` from `<linux/fb.h>`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-struct FbBitfield {
-    offset: u32,
-    length: u32,
-    msb_right: u32,
-}
-
-/// `struct fb_var_screeninfo` from `<linux/fb.h>`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-struct FbVarScreeninfo {
-    xres: u32,
-    yres: u32,
-    xres_virtual: u32,
-    yres_virtual: u32,
-    xoffset: u32,
-    yoffset: u32,
-    bits_per_pixel: u32,
-    grayscale: u32,
-    red: FbBitfield,
-    green: FbBitfield,
-    blue: FbBitfield,
-    transp: FbBitfield,
-    nonstd: u32,
-    activate: u32,
-    /// Physical height in mm.
-    height: u32,
-    /// Physical width in mm.
-    width: u32,
-    accel_flags: u32,
-    /// Pixel clock in picoseconds.
-    pixclock: u32,
-    left_margin: u32,
-    right_margin: u32,
-    upper_margin: u32,
-    lower_margin: u32,
-    hsync_len: u32,
-    vsync_len: u32,
-    sync: u32,
-    vmode: u32,
-    rotate: u32,
-    colorspace: u32,
-    reserved: [u32; 4],
-}
-
-const _: () = assert!(size_of::<FbVarScreeninfo>() == 160);
-
-/// `struct fb_fix_screeninfo` from `<linux/fb.h>`.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct FbFixScreeninfo {
-    id: [u8; 16],
-    smem_start: libc::c_ulong,
-    smem_len: u32,
-    type_: u32,
-    type_aux: u32,
-    visual: u32,
-    xpanstep: u16,
-    ypanstep: u16,
-    ywrapstep: u16,
-    line_length: u32,
-    mmio_start: libc::c_ulong,
-    mmio_len: u32,
-    accel: u32,
-    capabilities: u16,
-    reserved: [u16; 2],
-}
 
 /// Opens the framebuffer and creates the software renderer.
 pub(crate) fn open(options: &Options) -> Result<Started<LinuxFbPlatform>, Error> {
@@ -129,10 +56,6 @@ pub(crate) struct LinuxFbPlatform {
     _vt: Option<vt::VtGuard>,
 }
 
-fn fb_err(path: &std::path::Path, what: &str) -> Error {
-    Error::Framebuffer(format!("{}: {what}", path.display()))
-}
-
 impl LinuxFbPlatform {
     fn new(options: &Options) -> Result<Self, Error> {
         let path = options
@@ -140,34 +63,8 @@ impl LinuxFbPlatform {
             .fb_device
             .clone()
             .unwrap_or_else(|| PathBuf::from("/dev/fb0"));
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .map_err(|e| {
-                let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    " (add the user to the `video` group)"
-                } else {
-                    ""
-                };
-                fb_err(&path, &format!("{e}{hint}"))
-            })?;
+        let (file, var, fix, id) = fbdev::open_and_query(&path)?;
         let fd = file.as_raw_fd();
-
-        // SAFETY: the ioctls fill the structs, which match the kernel ABI.
-        let mut var = FbVarScreeninfo::default();
-        if unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO as _, &mut var) } != 0 {
-            let e = std::io::Error::last_os_error();
-            return Err(fb_err(&path, &format!("FBIOGET_VSCREENINFO: {e}")));
-        }
-        let mut fix: FbFixScreeninfo = unsafe { std::mem::zeroed() };
-        if unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO as _, &mut fix) } != 0 {
-            let e = std::io::Error::last_os_error();
-            return Err(fb_err(&path, &format!("FBIOGET_FSCREENINFO: {e}")));
-        }
-        let id = String::from_utf8_lossy(fix.id.split(|&b| b == 0).next().unwrap_or_default())
-            .into_owned();
-        log::debug!("{}: {id}, {var:?}", path.display());
 
         if fix.type_ != FB_TYPE_PACKED_PIXELS
             || !matches!(fix.visual, FB_VISUAL_TRUECOLOR | FB_VISUAL_DIRECTCOLOR)
@@ -235,15 +132,14 @@ impl LinuxFbPlatform {
             return Err(fb_err(&path, &format!("mmap: {e}")));
         }
 
-        // Wake the display if it was blanked by the console's power saving.
-        unsafe { libc::ioctl(fd, FBIOBLANK as _, FB_BLANK_UNBLANK) };
+        fbdev::unblank(fd);
 
         let vsync = options.vsync && wait_for_vsync(fd).is_ok();
-        let refresh_hz = refresh_hz(&var);
-        let physical_size_mm = options.output.physical_size_mm.or_else(|| {
-            let plausible = |mm: u32| (1..10_000).contains(&mm);
-            (plausible(var.width) && plausible(var.height)).then_some([var.width, var.height])
-        });
+        let refresh_hz = fbdev::refresh_hz(&var);
+        let physical_size_mm = options
+            .output
+            .physical_size_mm
+            .or_else(|| fbdev::physical_size_mm(&var));
         log::info!(
             "linuxfb: {} ({id}), {}x{} {} ({} bpp, stride {stride}), {refresh_hz:.1} Hz, vsync {}, \
              physical size {}",
@@ -285,22 +181,6 @@ fn wait_for_vsync(fd: libc::c_int) -> std::io::Result<()> {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error())
-    }
-}
-
-/// Refresh rate from the mode timings; 60 Hz if the driver does not report them (DRM fbdev
-/// emulation reports a zero pixel clock).
-fn refresh_hz(var: &FbVarScreeninfo) -> f32 {
-    let htotal = var.xres + var.left_margin + var.right_margin + var.hsync_len;
-    let vtotal = var.yres + var.upper_margin + var.lower_margin + var.vsync_len;
-    if var.pixclock == 0 || htotal == 0 || vtotal == 0 {
-        return 60.0;
-    }
-    let hz = 1e12 / (f64::from(var.pixclock) * f64::from(htotal) * f64::from(vtotal));
-    if (10.0..=240.0).contains(&hz) {
-        hz as f32
-    } else {
-        60.0
     }
 }
 

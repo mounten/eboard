@@ -23,7 +23,7 @@ the next version are derived from them.
 | `revert` | reverting an earlier commit | Reverted |
 | `test`, `build`, `ci`, `chore`, `style` | everything else | not listed |
 
-Scopes are optional and name the part of the crate, e.g. `kms`, `linuxfb`, `soft` (software
+Scopes are optional and name the part of the crate, e.g. `kms`, `viv-fb`, `linuxfb`, `soft` (software
 renderer), `glow`, `input`, `runner`, `options`, `examples` or `tools`. A breaking change is marked
 with `!` after the type (`feat(input)!: ...`) or a `BREAKING CHANGE:` footer.
 
@@ -40,7 +40,8 @@ cargo fmt --check
 cargo clippy --all-targets
 cargo clippy --target aarch64-unknown-linux-gnu --all-targets
 cargo clippy --target armv7-unknown-linux-gnueabihf --all-targets
-cargo clippy --target armv7-unknown-linux-gnueabihf --no-default-features --features linuxfb,input-evdev --all-targets
+cargo clippy --target armv7-unknown-linux-gnueabihf --no-default-features --features viv-fb,linuxfb,input-evdev --all-targets
+cargo clippy --target armv7-unknown-linux-gnueabihf --no-default-features --features viv-fb --all-targets
 cargo test
 ```
 

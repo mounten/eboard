@@ -25,6 +25,10 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
   Platforms without vblank events are paced by `Platform::frame_interval`. No busy loop: idle CPU
   must stay ~0.
 - `src/signals.rs`: SIGINT/SIGTERM → clean exit (the second signal `_exit`s).
+- `src/storage.rs` (feature `persistence`): eframe-like `Storage`, `get_value`/`set_value` (RON),
+  `FileStorage` (one RON map, written only when changed, atomically: tmp + fsync + rename + dir
+  fsync; a corrupt file is moved to `*.bad`), state path resolution. The runner arms an auto-save
+  deadline after each frame (part of the poll timeout) and saves before `on_exit`.
 - `src/platform/`: `Platform` trait (with an associated `Renderer` type) and `Started<P>`.
   - `kms.rs`: DRM/GBM, page flips, CRTC restore, `kms::open` also creates the `GlowRenderer`.
   - `mod.rs` also has `glow_started`, which wraps any GL platform with a `GlowRenderer` (software
@@ -86,6 +90,7 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 Host (Windows):
 ```sh
 cargo test                                   # unit tests, including the software rasterizer
+cargo test --features persistence
 cargo test soft_snapshot -- --ignored        # renders target/soft_snapshot.png for a visual check
 cargo clippy --target aarch64-unknown-linux-gnu --all-targets
 cargo clippy --target armv7-unknown-linux-gnueabihf --all-targets
@@ -140,6 +145,8 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 - Input (evdev touch/mouse/keyboard, hotplug, keyboard grab) is done and verified on the Pi 5 with
   virtual devices from `tools/` (taps, drag, multi-touch, rotation 90°, typing, mouse cursor).
   Still to try: real finger touches on the Touch Display 2.
+- Persistence (`persistence` feature) is done and verified on the Pi 5: restore after restart,
+  auto-save survives `SIGKILL` with an intact file.
 - Input not done yet: keyboard layouts other than US (xkbcommon), touchpads, tslib calibration,
   hardware cursor plane, key repeat settings.
 - Later: GLES2 32-bit index workaround (i.MX6DL/S GC880 without `GL_OES_element_index_uint`), phase 4 extras (wgpu + `VK_KHR_display`, EGLDevice, multi-output).

@@ -36,8 +36,8 @@ Raspberry Pi 5 with the Touch Display 2.
 | `viv-fb` | `viv-fb` (default) | OpenGL ES 2/3 (`egui_glow`) via Vivante's fbdev EGL on `/dev/fbN` | i.MX6 BSPs with the Vivante GPU driver but no KMS/GBM (like Qt's `eglfs_viv`) |
 | `linuxfb` | `linuxfb` (default) | CPU (built-in software rasterizer) | `/dev/fbN` without GPU/KMS drivers, e.g. i.MX6 BSPs |
 
-Input is the separate `input-evdev` feature (default), and `default_fonts` (default) bundles
-egui's fonts.
+Input is the separate `input-evdev` feature (default), `default_fonts` (default) bundles
+egui's fonts, and `persistence` saves app state between runs.
 
 The backend is picked at runtime. `auto` (default) tries `kms` first, then `viv-fb`, then
 `linuxfb`.
@@ -66,6 +66,40 @@ automatically.
   app with an internal clipboard.
 - Keyboards are grabbed by default (`EVIOCGRAB`), so typing doesn't also go to the text console
   behind the app (e.g. a login prompt). Ctrl+C on that keyboard then doesn't stop the app.
+
+## Persistence
+
+With the `persistence` feature, eboard saves state like eframe does: implement `App::save`, read
+the state back from `CreationContext::storage`, and egui's memory (collapsed headers, scroll
+positions, zoom) is saved too.
+
+```rust
+impl eboard::App for MyApp {
+    fn save(&mut self, storage: &mut dyn eboard::Storage) {
+        eboard::set_value(storage, eboard::APP_KEY, &self.settings);
+    }
+    // ...
+}
+
+eboard::run(eboard::Options::default(), |cc| {
+    let settings = cc
+        .storage
+        .and_then(|s| eboard::get_value(s, eboard::APP_KEY))
+        .unwrap_or_default();
+    Ok(Box::new(MyApp { settings }))
+})?;
+```
+
+`App::save` runs on exit (also on SIGINT/SIGTERM) and every `App::auto_save_interval` (30 s) after
+the UI was repainted. Boards lose power without warning and flash wears out, so the file is only
+written when its content changed, and atomically (temporary file, fsync, rename, fsync of the
+directory): after a power cut there is either the old or the new state. A file that doesn't parse
+is moved to `app.ron.bad` and the app starts with empty state. Settings that must survive an
+immediate power cut can be saved and flushed right away through `Frame::storage_mut`.
+
+The file is `persistence_path` if set, else `$STATE_DIRECTORY/app.ron` (systemd
+`StateDirectory=`, the usual choice for a kiosk service), else `$XDG_DATA_HOME/<app>/app.ron`, else
+`~/.local/share/<app>/app.ron`, where `<app>` is the executable's name.
 
 ## Fonts
 
@@ -116,6 +150,7 @@ variable, so a deployed binary can be reconfigured without rebuilding.
 | `input.grab` | `EBOARD_INPUT_GRAB` | `none`, `keyboards`, `all` | Exclusive access (default `keyboards`) |
 | `input.touch_transform` | `EBOARD_TOUCH_TRANSFORM` | `swapxy,invx,invy` | Fix touch axes that don't match the panel |
 | `input.show_cursor` | – | `false` | Draw a mouse cursor while a mouse is used (default on) |
+| `persistence_path` | `EBOARD_PERSISTENCE_PATH` | `/var/lib/myapp/state.ron` | State file (feature `persistence`, see above) |
 
 Rotation: `90` turns a native portrait panel (e.g. 720×1280) into a landscape UI (1280×720).
 `kms` lets the display controller do 180° if it can and does everything else on the GPU, `viv-fb`

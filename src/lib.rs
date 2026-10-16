@@ -65,6 +65,14 @@
 //! | `EBOARD_PHYSICAL_SIZE` | `155x88` | panel size in mm, for the scale factor |
 //! | `EBOARD_PPP` | `1.5` | fixed `native_pixels_per_point` |
 //! | `EBOARD_VSYNC` | `0` | async page flips / no `FBIO_WAITFORVSYNC` |
+//! | `EBOARD_PERSISTENCE_PATH` | `/var/lib/app/state.ron` | state file (feature `persistence`) |
+//!
+//! # Persistence
+//!
+//! With the `persistence` feature, `App::save` stores state in a `Storage` that is written
+//! atomically to a RON file (only when it changed) and handed back through
+//! `CreationContext::storage` on the next start, like eframe. See `Options::persistence_path`
+//! for where the file goes.
 //!
 //! Set `RUST_LOG=debug` (with a logger such as `env_logger`) to see the EGL/GL implementation and
 //! the chosen device, connector and mode.
@@ -90,6 +98,8 @@ mod render;
 mod runner;
 #[cfg(target_os = "linux")]
 mod signals;
+#[cfg(feature = "persistence")]
+mod storage;
 
 pub use egui;
 #[cfg(feature = "glow")]
@@ -101,6 +111,8 @@ pub use app::{App, CreationContext, Frame, ScreenInfo};
 pub use error::Error;
 pub use geometry::{Rotation, TouchTransform, pixels_per_point_from_size};
 pub use options::{Backend, InputGrab, InputOptions, ModeRequest, Options, OutputConfig};
+#[cfg(feature = "persistence")]
+pub use storage::{APP_KEY, Storage, get_value, set_value};
 
 /// Error type app creators may return.
 pub type DynError = Box<dyn std::error::Error + Send + Sync>;
@@ -221,11 +233,15 @@ mod backends {
         );
 
         let egui_ctx = egui::Context::default();
+        #[cfg(feature = "persistence")]
+        let storage = load_storage(options, &egui_ctx);
         let creation_context = CreationContext {
             egui_ctx: egui_ctx.clone(),
             #[cfg(feature = "glow")]
             gl: gl.clone(),
             screen: &screen,
+            #[cfg(feature = "persistence")]
+            storage: storage.as_deref(),
         };
         let mut app = match app_creator(&creation_context) {
             Ok(app) => app,
@@ -241,6 +257,8 @@ mod backends {
             cpu_usage: None,
             #[cfg(feature = "glow")]
             gl,
+            #[cfg(feature = "persistence")]
+            storage,
         };
         let result = runner::Runner {
             #[cfg(feature = "input-evdev")]
@@ -260,6 +278,28 @@ mod backends {
         renderer.destroy();
         drop(platform);
         result
+    }
+
+    /// Opens the state file and restores egui's memory from it, like eframe, before the app is
+    /// created (so the app's own setup, e.g. its zoom, wins).
+    #[cfg(feature = "persistence")]
+    fn load_storage(options: &Options, egui_ctx: &egui::Context) -> Option<Box<dyn Storage>> {
+        let Some(path) = storage::resolve_path(
+            options.persistence_path.as_deref(),
+            |key| std::env::var(key).ok(),
+            &storage::app_name(),
+        ) else {
+            log::warn!(
+                "No place to save the app state (set EBOARD_PERSISTENCE_PATH or HOME); \
+                 persistence is off"
+            );
+            return None;
+        };
+        let storage = storage::FileStorage::load(path);
+        if let Some(memory) = get_value::<egui::Memory>(&storage, storage::EGUI_MEMORY_KEY) {
+            egui_ctx.memory_mut(|m| *m = memory);
+        }
+        Some(Box::new(storage))
     }
 }
 

@@ -225,6 +225,13 @@ pub struct Options {
 
     /// Touch, mouse and keyboard (feature `input-evdev`).
     pub input: InputOptions,
+
+    /// File the app state is saved to (feature `persistence`). Default:
+    /// `$STATE_DIRECTORY/app.ron` (systemd `StateDirectory=`), else
+    /// `$XDG_DATA_HOME/<app>/app.ron`, else `~/.local/share/<app>/app.ron`, where `<app>` is the
+    /// executable's name. Env: `EBOARD_PERSISTENCE_PATH`.
+    #[cfg(feature = "persistence")]
+    pub persistence_path: Option<PathBuf>,
 }
 
 /// Input devices from `/dev/input/event*` (feature `input-evdev`). Touchscreens, mice and
@@ -270,6 +277,8 @@ impl Default for Options {
             shader_version: None,
             handle_signals: true,
             input: InputOptions::default(),
+            #[cfg(feature = "persistence")]
+            persistence_path: None,
         }
     }
 }
@@ -345,6 +354,10 @@ impl Options {
         if let Some(v) = var("EBOARD_TOUCH_TRANSFORM") {
             self.input.touch_transform = parse("EBOARD_TOUCH_TRANSFORM", &v)?;
         }
+        #[cfg(feature = "persistence")]
+        if let Some(v) = var("EBOARD_PERSISTENCE_PATH") {
+            self.persistence_path = Some(PathBuf::from(v));
+        }
         Ok(())
     }
 }
@@ -404,6 +417,16 @@ mod tests {
         assert!(o.input.enabled);
         assert_eq!(o.input.grab, InputGrab::All);
         assert!(o.input.touch_transform.invert_y);
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn env_sets_persistence_path() {
+        let o = with_env(&[("EBOARD_PERSISTENCE_PATH", "/var/lib/hello/state.ron")]).unwrap();
+        assert_eq!(
+            o.persistence_path,
+            Some(PathBuf::from("/var/lib/hello/state.ron"))
+        );
     }
 
     #[test]

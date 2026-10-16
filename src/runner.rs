@@ -86,6 +86,8 @@ impl<P: Platform> Runner<'_, P> {
         };
 
         let result = self.event_loop(app, &signal);
+        #[cfg(feature = "persistence")]
+        self.save(app);
         app.on_exit();
         self.egui_ctx.set_request_repaint_callback(|_| {});
         result
@@ -96,6 +98,10 @@ impl<P: Platform> Runner<'_, P> {
         let mut next_repaint = Some(start);
         // Earliest start of the next frame on platforms paced by a frame interval.
         let mut earliest_frame: Option<Instant> = None;
+        // Next auto-save, armed by the first frame after the previous save: a change followed by
+        // hours of idle still gets saved, and an idle UI never wakes up just to save.
+        #[cfg(feature = "persistence")]
+        let mut save_deadline: Option<Instant> = None;
 
         loop {
             if self.handle_signals && signals::quit_requested() {
@@ -108,6 +114,11 @@ impl<P: Platform> Runner<'_, P> {
             }
 
             let now = Instant::now();
+            #[cfg(feature = "persistence")]
+            if save_deadline.is_some_and(|t| t <= now) {
+                save_deadline = None;
+                self.save(app);
+            }
             let ready_at = match (next_repaint, earliest_frame) {
                 (Some(t), Some(earliest)) => Some(t.max(earliest)),
                 (t, _) => t,
@@ -120,6 +131,10 @@ impl<P: Platform> Runner<'_, P> {
                     .and_then(|i| now.checked_add(i));
                 let (repaint_delay, close) = self.frame(app, start)?;
                 next_repaint = Instant::now().checked_add(repaint_delay);
+                #[cfg(feature = "persistence")]
+                if save_deadline.is_none() && self.frame.storage.is_some() {
+                    save_deadline = Instant::now().checked_add(app.auto_save_interval());
+                }
                 if close {
                     log::info!("App requested close");
                     return Ok(());
@@ -139,12 +154,32 @@ impl<P: Platform> Runner<'_, P> {
             } else {
                 ready_at.map(|t| t.saturating_duration_since(now))
             };
+            #[cfg(feature = "persistence")]
+            let timeout = earliest(
+                timeout,
+                save_deadline.map(|t| t.saturating_duration_since(now)),
+            );
             if self.wait(signal, timeout)? {
                 // Input: repaint right away (still paced by vsync / the frame interval).
                 let now = Instant::now();
                 next_repaint = Some(next_repaint.map_or(now, |t| t.min(now)));
             }
         }
+    }
+
+    /// Lets the app save its state, adds egui's memory and writes the file if anything changed.
+    #[cfg(feature = "persistence")]
+    fn save(&mut self, app: &mut dyn App) {
+        let Some(storage) = self.frame.storage.as_deref_mut() else {
+            return;
+        };
+        app.save(storage);
+        if app.persist_egui_memory() {
+            self.egui_ctx.memory(|memory| {
+                crate::set_value(storage, crate::storage::EGUI_MEMORY_KEY, memory);
+            });
+        }
+        storage.flush();
     }
 
     /// egui's current points-to-pixels factor.
@@ -306,5 +341,14 @@ impl<P: Platform> Runner<'_, P> {
             raw_input.events = input.take_events();
         }
         raw_input
+    }
+}
+
+/// The shorter of two poll timeouts, where `None` means "no timeout".
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
+fn earliest(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
     }
 }

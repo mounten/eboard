@@ -10,7 +10,8 @@
 //! EBOARD_BACKEND=linuxfb RUST_LOG=info cargo run --release --example hello
 //! ```
 //!
-//! Stop it with Ctrl+C or the Quit button; the console comes back.
+//! Stop it with Ctrl+C or the Quit button; the console comes back. Built with
+//! `--features persistence`, the slider value survives a restart.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -148,6 +149,11 @@ impl eboard::App for Hello {
         }
     }
 
+    #[cfg(feature = "persistence")]
+    fn save(&mut self, storage: &mut dyn eboard::Storage) {
+        eboard::set_value(storage, eboard::APP_KEY, &self.value);
+    }
+
     fn on_exit(&mut self) {
         log::info!("Exiting after {} frames", self.frames);
     }
@@ -159,12 +165,19 @@ fn main() {
     let animate = std::env::args().any(|arg| arg == "--animate");
     let result = eboard::run(eboard::Options::default(), |cc| {
         log::info!("Starting on {}", cc.screen.output_name);
+        #[cfg(feature = "persistence")]
+        let value = cc
+            .storage
+            .and_then(|storage| eboard::get_value(storage, eboard::APP_KEY))
+            .unwrap_or(50.0);
+        #[cfg(not(feature = "persistence"))]
+        let value = 50.0;
         Ok(Box::new(Hello {
             started: Instant::now(),
             frames: 0,
             animate,
             clicks: 0,
-            value: 50.0,
+            value,
             text: "Type here".to_owned(),
             touches: BTreeMap::new(),
         }))

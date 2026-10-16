@@ -5,6 +5,8 @@ use std::sync::Arc;
 use crate::glow;
 
 use crate::Rotation;
+#[cfg(feature = "persistence")]
+use crate::Storage;
 
 /// Implement this for your application. Mirrors `eframe::App`.
 pub trait App {
@@ -15,9 +17,32 @@ pub trait App {
     /// Called before [`Self::ui`] each frame, for logic that does not need a [`egui::Ui`].
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut Frame) {}
 
-    /// Called once before the run loop exits (window close, [`Frame::close`], SIGINT/SIGTERM).
-    /// The display is still up and the GL context is current.
+    /// Called once before the run loop exits (window close, [`Frame::close`], SIGINT/SIGTERM),
+    /// after `save` (feature `persistence`). The display is still up and the GL context is
+    /// current.
     fn on_exit(&mut self) {}
+
+    /// Save the app state, usually with [`crate::set_value`] under [`crate::APP_KEY`]. Called on
+    /// exit and every [`Self::auto_save_interval`] after something was repainted (feature
+    /// `persistence`). The file is only written if the stored state changed.
+    ///
+    /// The process may be killed or lose power without exiting, so anything that must not get
+    /// lost should be saved (and flushed with [`Frame::storage_mut`]) right away.
+    #[cfg(feature = "persistence")]
+    fn save(&mut self, _storage: &mut dyn Storage) {}
+
+    /// Time between automatic calls to [`Self::save`]. Saving only writes to flash if something
+    /// changed, but a shorter interval means more writes while the UI is in use.
+    #[cfg(feature = "persistence")]
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(30)
+    }
+
+    /// Whether egui's memory (collapsed headers, scroll positions, zoom, ...) is saved too.
+    #[cfg(feature = "persistence")]
+    fn persist_egui_memory(&self) -> bool {
+        true
+    }
 
     /// Color the screen is cleared to before egui paints, in gamma space (`[r, g, b, a]`, 0..=1).
     /// Called every frame. The scanout buffer is opaque, so alpha has no effect on the panel.
@@ -64,6 +89,8 @@ pub struct Frame {
     pub(crate) cpu_usage: Option<f32>,
     #[cfg(feature = "glow")]
     pub(crate) gl: Option<Arc<glow::Context>>,
+    #[cfg(feature = "persistence")]
+    pub(crate) storage: Option<Box<dyn Storage>>,
 }
 
 impl Frame {
@@ -94,6 +121,19 @@ impl Frame {
     pub fn gl(&self) -> Option<&Arc<glow::Context>> {
         self.gl.as_ref()
     }
+
+    /// The state store, `None` if no path for it could be found (see
+    /// [`crate::Options::persistence_path`]).
+    #[cfg(feature = "persistence")]
+    pub fn storage(&self) -> Option<&dyn Storage> {
+        self.storage.as_deref()
+    }
+
+    /// The state store, e.g. to save and [`Storage::flush`] something important immediately.
+    #[cfg(feature = "persistence")]
+    pub fn storage_mut(&mut self) -> Option<&mut (dyn Storage + 'static)> {
+        self.storage.as_deref_mut()
+    }
 }
 
 /// Passed to the app creator in [`crate::run`]. Mirrors `eframe::CreationContext`.
@@ -107,4 +147,9 @@ pub struct CreationContext<'a> {
 
     /// The output the app will be drawn to.
     pub screen: &'a ScreenInfo,
+
+    /// State saved by [`App::save`] in an earlier run (feature `persistence`). Read it with
+    /// [`crate::get_value`]. `None` if no path for it could be found.
+    #[cfg(feature = "persistence")]
+    pub storage: Option<&'a dyn Storage>,
 }

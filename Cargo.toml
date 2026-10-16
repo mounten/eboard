@@ -1,6 +1,6 @@
 [package]
 name = "eboard"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "eframe for embedded boards: run egui apps full-screen on Linux without a compositor (KMS/DRM, framebuffer), like Qt's eglfs and linuxfb"
 license = "MIT OR Apache-2.0"

@@ -65,6 +65,8 @@
 //! | `EBOARD_PHYSICAL_SIZE` | `155x88` | panel size in mm, for the scale factor |
 //! | `EBOARD_PPP` | `1.5` | fixed `native_pixels_per_point` |
 //! | `EBOARD_VSYNC` | `0` | async page flips / no `FBIO_WAITFORVSYNC` |
+//! | `EBOARD_BLANK_AFTER` | `300` | power the display down after N s without input (`0` = off) |
+//! | `EBOARD_BACKLIGHT` | `panel_backlight@1` | device in `/sys/class/backlight` |
 //! | `EBOARD_PERSISTENCE_PATH` | `/var/lib/app/state.ron` | state file (feature `persistence`) |
 //!
 //! # Persistence
@@ -89,6 +91,7 @@
 mod app;
 mod error;
 mod geometry;
+mod idle;
 #[cfg(feature = "input-evdev")]
 mod input;
 mod options;
@@ -259,10 +262,28 @@ mod backends {
             gl,
             #[cfg(feature = "persistence")]
             storage,
+            backlight: open_backlight(options),
+            blank_after_request: None,
         };
+        #[cfg(feature = "input-evdev")]
+        let input = input::Input::new(options, panel_size);
+        #[cfg(feature = "input-evdev")]
+        let can_wake = input.is_some();
+        #[cfg(not(feature = "input-evdev"))]
+        let can_wake = false;
+        let blank_after = options.blank_after.filter(|_| {
+            if !can_wake {
+                log::warn!("Idle blanking needs input to wake the display; it stays off");
+            }
+            can_wake
+        });
         let result = runner::Runner {
             #[cfg(feature = "input-evdev")]
-            input: input::Input::new(options, panel_size),
+            input,
+            #[cfg(feature = "input-evdev")]
+            wake_filter: idle::WakeFilter::default(),
+            idle: idle::IdleTimer::new(blank_after, std::time::Instant::now()),
+            can_wake,
             platform: &mut platform,
             renderer: &mut renderer,
             egui_ctx,
@@ -278,6 +299,24 @@ mod backends {
         renderer.destroy();
         drop(platform);
         result
+    }
+
+    fn open_backlight(options: &Options) -> Option<platform::backlight::Backlight> {
+        let wanted = options.output.backlight.as_deref();
+        match platform::backlight::Backlight::open(wanted) {
+            Ok(backlight) => {
+                log::info!("Backlight: {} (max {})", backlight.name(), backlight.max());
+                Some(backlight)
+            }
+            Err(e) if wanted.is_some() => {
+                log::warn!("Backlight: {e}");
+                None
+            }
+            Err(e) => {
+                log::debug!("Backlight: {e}");
+                None
+            }
+        }
     }
 
     /// Opens the state file and restores egui's memory from it, like eframe, before the app is

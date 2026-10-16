@@ -38,6 +38,10 @@ const DRM_MODE_ROTATE_180: u64 = 1 << 2;
 /// Value of the plane `type` enum property for primary planes.
 const DRM_PLANE_TYPE_PRIMARY: u64 = 1;
 
+/// Values of the connector `DPMS` enum property.
+const DRM_MODE_DPMS_ON: u64 = 0;
+const DRM_MODE_DPMS_OFF: u64 = 3;
+
 const MASTER_HINT: &str = "another process is DRM master. Stop the desktop / display manager \
      (e.g. `sudo systemctl isolate multi-user.target`) and run from a console or over SSH";
 
@@ -96,6 +100,9 @@ pub(crate) struct KmsPlatform {
     saved_crtc: crtc::Info,
     modeset_done: bool,
     plane_rotation: Option<PlaneRotation>,
+    /// The connector's `DPMS` property, for idle blanking.
+    dpms: Option<property::Handle>,
+    blanked: bool,
     hw_rotation: Rotation,
     physical_size_mm: Option<[u32; 2]>,
     refresh_hz: f32,
@@ -140,6 +147,7 @@ impl KmsPlatform {
             })
         });
 
+        let dpms = find_property(&card, output.connector, "DPMS").map(|(prop, _)| prop);
         let refresh_hz = mode_refresh_hz(&output.mode);
         let (w, h) = output.mode.size();
         let physical_size_mm = options.output.physical_size_mm.or(output.size_mm);
@@ -167,6 +175,8 @@ impl KmsPlatform {
             saved_crtc,
             modeset_done: false,
             plane_rotation,
+            dpms,
+            blanked: false,
             hw_rotation: Rotation::Deg0,
             physical_size_mm,
             refresh_hz,
@@ -399,6 +409,15 @@ impl KmsPlatform {
         }
     }
 
+    fn set_dpms(&self, value: u64) -> Result<(), Error> {
+        let dpms = self
+            .dpms
+            .ok_or_else(|| Error::Kms(format!("{} has no DPMS property", self.output_name())))?;
+        self.gbm
+            .set_property(self.output.connector, dpms, value)
+            .map_err(|e| Error::Kms(format!("setting DPMS: {e}")))
+    }
+
     fn restore_crtc(&self) {
         let o = &self.output;
         let saved = &self.saved_crtc;
@@ -477,11 +496,30 @@ impl Platform for KmsPlatform {
         }
         Ok(())
     }
+
+    fn set_blanked(&mut self, blanked: bool) -> Result<(), Error> {
+        if blanked {
+            // A flip can't complete on a display that is off.
+            self.wait_for_pending_flip();
+        }
+        self.set_dpms(if blanked {
+            DRM_MODE_DPMS_OFF
+        } else {
+            DRM_MODE_DPMS_ON
+        })?;
+        self.blanked = blanked;
+        Ok(())
+    }
 }
 
 impl Drop for KmsPlatform {
     fn drop(&mut self) {
         self.wait_for_pending_flip();
+        if self.blanked
+            && let Err(e) = self.set_dpms(DRM_MODE_DPMS_ON)
+        {
+            log::warn!("{e}");
+        }
         if self.modeset_done {
             self.restore_crtc();
         }

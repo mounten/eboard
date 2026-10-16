@@ -51,6 +51,7 @@ The backend is picked at runtime. `auto` (default) tries `kms` first, then `viv-
   eboard warns if it is smaller.
 - `linuxfb` copies only the changed area to the framebuffer and supports 16/24/32 bpp formats.
 - SIGINT/SIGTERM exit cleanly: `App::on_exit` is called and the display/console is restored.
+- Optional idle blanking and backlight control, see below.
 
 ## Input
 
@@ -66,6 +67,31 @@ automatically.
   app with an internal clipboard.
 - Keyboards are grabbed by default (`EVIOCGRAB`), so typing doesn't also go to the text console
   behind the app (e.g. a login prompt). Ctrl+C on that keyboard then doesn't stop the app.
+
+## Screen blanking and backlight
+
+Panels that run around the clock should go dark when nobody uses them (burn-in, power). With
+`blank_after` (or `EBOARD_BLANK_AFTER=300`), eboard powers the display down after that long
+without input: DPMS off with `kms`, `FBIOBLANK` with `viv-fb` and `linuxfb`; the kernel switches
+the panel's backlight off with it. Nothing is rendered while it is dark, so the CPU stays idle.
+
+The next touch, click or key press wakes the display, and that whole gesture is swallowed: a tap
+on a dark screen can't press a button nobody could see. Apps can change the timeout at runtime,
+or turn blanking off while a video or an alarm is shown, with `Frame::set_blank_after`. Blanking
+needs input (`input-evdev`), otherwise nothing could wake the display.
+
+`Frame::brightness()` and `Frame::set_brightness(0.0..=1.0)` control the backlight through
+`/sys/class/backlight`. The device is picked automatically (`firmware`, then `platform`, then
+`raw`, like systemd) or set with `output.backlight` / `EBOARD_BACKLIGHT`. Writing it needs the
+`video` group on most distributions, or a udev rule such as:
+
+```
+# /etc/udev/rules.d/90-backlight.rules
+SUBSYSTEM=="backlight", ACTION=="add", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness"
+```
+
+On many panels a brightness of 0 switches the backlight off completely, so let sliders start a
+little above 0.
 
 ## Persistence
 
@@ -141,6 +167,7 @@ variable, so a deployed binary can be reconfigured without rebuilding.
 | `output.rotation` | `EBOARD_ROTATION` | `90` | Rotate the UI clockwise: `0`, `90`, `180`, `270` |
 | `output.physical_size_mm` | `EBOARD_PHYSICAL_SIZE` | `155x88` | Panel size in mm, used for the scale factor |
 | `output.pixels_per_point` | `EBOARD_PPP` | `1.5` | Fixed scale factor (default: from the panel's pixel density, 160 dpi = 1.0) |
+| `output.backlight` | `EBOARD_BACKLIGHT` | `panel_backlight@1` | Device in `/sys/class/backlight` for `Frame::set_brightness` (default: picked automatically) |
 | `vsync` | `EBOARD_VSYNC` | `0` | Wait for vblank (default on) |
 | `multisampling` | – | `4` | MSAA samples (GL backends `kms`/`viv-fb`, default 0) |
 | `dithering` | – | `false` | Dithering in the GL shader (`kms`/`viv-fb`, default on) |
@@ -150,6 +177,7 @@ variable, so a deployed binary can be reconfigured without rebuilding.
 | `input.grab` | `EBOARD_INPUT_GRAB` | `none`, `keyboards`, `all` | Exclusive access (default `keyboards`) |
 | `input.touch_transform` | `EBOARD_TOUCH_TRANSFORM` | `swapxy,invx,invy` | Fix touch axes that don't match the panel |
 | `input.show_cursor` | – | `false` | Draw a mouse cursor while a mouse is used (default on) |
+| `blank_after` | `EBOARD_BLANK_AFTER` | `300` | Power the display down after this many seconds without input (default off, `0` = off) |
 | `persistence_path` | `EBOARD_PERSISTENCE_PATH` | `/var/lib/myapp/state.ron` | State file (feature `persistence`, see above) |
 
 Rotation: `90` turns a native portrait panel (e.g. 720×1280) into a landscape UI (1280×720).

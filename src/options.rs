@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use crate::{Error, Rotation, TouchTransform, geometry::parse_size};
 
@@ -188,6 +189,11 @@ pub struct OutputConfig {
     /// Fixed `native_pixels_per_point`. Default: derived from the physical size
     /// (see [`crate::pixels_per_point_from_size`]). Env: `EBOARD_PPP`.
     pub pixels_per_point: Option<f32>,
+
+    /// Backlight device in `/sys/class/backlight` for [`crate::Frame::set_brightness`], e.g.
+    /// `panel_backlight@1`. Default: picked automatically (`firmware` before `platform` before
+    /// `raw`, like systemd). Env: `EBOARD_BACKLIGHT`.
+    pub backlight: Option<String>,
 }
 
 /// Options for [`crate::run`].
@@ -225,6 +231,13 @@ pub struct Options {
 
     /// Touch, mouse and keyboard (feature `input-evdev`).
     pub input: InputOptions,
+
+    /// Power the display down after this long without input (burn-in, power saving). The touch,
+    /// click or key press that wakes it is swallowed, so it can't press anything. Needs input
+    /// (feature `input-evdev`), otherwise nothing could wake the display. Apps can change it at
+    /// runtime with [`crate::Frame::set_blank_after`]. Default: off. Env: `EBOARD_BLANK_AFTER`
+    /// (seconds, `0` = off).
+    pub blank_after: Option<Duration>,
 
     /// File the app state is saved to (feature `persistence`). Default:
     /// `$STATE_DIRECTORY/app.ron` (systemd `StateDirectory=`), else
@@ -277,6 +290,7 @@ impl Default for Options {
             shader_version: None,
             handle_signals: true,
             input: InputOptions::default(),
+            blank_after: None,
             #[cfg(feature = "persistence")]
             persistence_path: None,
         }
@@ -345,6 +359,18 @@ impl Options {
         if let Some(v) = var("EBOARD_VSYNC") {
             self.vsync = parse_bool("EBOARD_VSYNC", &v)?;
         }
+        if let Some(v) = var("EBOARD_BACKLIGHT") {
+            self.output.backlight = Some(v.trim().to_owned());
+        }
+        if let Some(v) = var("EBOARD_BLANK_AFTER") {
+            let seconds: f64 = parse("EBOARD_BLANK_AFTER", &v)?;
+            if !(seconds.is_finite() && seconds >= 0.0) {
+                return Err(Error::Config(format!(
+                    "EBOARD_BLANK_AFTER={v:?}: expected seconds >= 0"
+                )));
+            }
+            self.blank_after = (seconds > 0.0).then(|| Duration::from_secs_f64(seconds));
+        }
         if let Some(v) = var("EBOARD_INPUT") {
             self.input.enabled = parse_bool("EBOARD_INPUT", &v)?;
         }
@@ -396,6 +422,8 @@ mod tests {
             ("EBOARD_VSYNC", "0"),
             ("EBOARD_INPUT_GRAB", "all"),
             ("EBOARD_TOUCH_TRANSFORM", "invy"),
+            ("EBOARD_BACKLIGHT", "panel_backlight@1"),
+            ("EBOARD_BLANK_AFTER", "300"),
         ])
         .unwrap();
         assert_eq!(o.backend, Backend::Kms);
@@ -417,6 +445,21 @@ mod tests {
         assert!(o.input.enabled);
         assert_eq!(o.input.grab, InputGrab::All);
         assert!(o.input.touch_transform.invert_y);
+        assert_eq!(o.output.backlight.as_deref(), Some("panel_backlight@1"));
+        assert_eq!(o.blank_after, Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn blank_after_values() {
+        let blank_after = |v: &str| with_env(&[("EBOARD_BLANK_AFTER", v)]).map(|o| o.blank_after);
+        assert_eq!(blank_after("0").unwrap(), None);
+        assert_eq!(
+            blank_after("2.5").unwrap(),
+            Some(Duration::from_millis(2500))
+        );
+        assert!(blank_after("-1").is_err());
+        assert!(blank_after("inf").is_err());
+        assert!(blank_after("5min").is_err());
     }
 
     #[cfg(feature = "persistence")]

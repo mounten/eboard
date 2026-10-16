@@ -25,6 +25,11 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
   Platforms without vblank events are paced by `Platform::frame_interval`. No busy loop: idle CPU
   must stay ~0.
 - `src/signals.rs`: SIGINT/SIGTERM → clean exit (the second signal `_exit`s).
+- `src/idle.rs`: `IdleTimer` (blank deadline, part of the poll timeout) and `WakeFilter`, which
+  swallows the gesture that wakes the display (until every touch/button/key pressed after waking
+  is released; motion-only batches end it). Pure, tested. While blanked the runner renders nothing
+  and polls without timeout; input calls `Platform::set_blanked(false)` (kms: connector `DPMS`
+  property; fbdev: `FBIOBLANK`). Without input, blanking stays off.
 - `src/storage.rs` (feature `persistence`): eframe-like `Storage`, `get_value`/`set_value` (RON),
   `FileStorage` (one RON map, written only when changed, atomically: tmp + fsync + rename + dir
   fsync; a corrupt file is moved to `*.bad`), state path resolution. The runner arms an auto-save
@@ -41,6 +46,9 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
   - `fbdev.rs`: `<linux/fb.h>` structs and ioctls, refresh rate, shared by `linuxfb` and `viv-fb`.
   - `linuxfb.rs`: mmap of `/dev/fbN`. `present` copies only the damaged area of the canvas,
     converting pixel format and rotating on the way.
+  - `backlight.rs`: `/sys/class/backlight` device choice (firmware > platform > raw) and
+    brightness `0..=1` ↔ raw (pure, tested; std only, so it builds on every host). Blanking does
+    not write `bl_power`: DPMS/FBIOBLANK switch the backlight off in the kernel (checked on the Pi).
   - `vt.rs`: `KD_GRAPHICS` on the console, so fbcon does not draw over the UI (needs root or
     running on the VT).
 - `src/render/`: `Renderer` trait.
@@ -147,6 +155,9 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
   Still to try: real finger touches on the Touch Display 2.
 - Persistence (`persistence` feature) is done and verified on the Pi 5: restore after restart,
   auto-save survives `SIGKILL` with an intact file.
+- Idle blanking + backlight are done and verified on the Pi 5 with `kms` and `linuxfb`: DPMS goes
+  off (backlight too), ~0% CPU while dark, the waking tap doesn't click, brightness slider writes
+  sysfs. linuxfb copies the whole canvas after unblanking (fbcon may have drawn over it).
 - Input not done yet: keyboard layouts other than US (xkbcommon), touchpads, tslib calibration,
   hardware cursor plane, key repeat settings.
 - Later: GLES2 32-bit index workaround (i.MX6DL/S GC880 without `GL_OES_element_index_uint`), phase 4 extras (wgpu + `VK_KHR_display`, EGLDevice, multi-output).

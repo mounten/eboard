@@ -17,7 +17,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 features = ["persistence"]
 
 [features]
-default = ["kms", "viv-fb", "linuxfb", "input-evdev", "default_fonts"]
+default = ["kms", "viv-fb", "linuxfb", "input-evdev", "osk", "default_fonts"]
 
 ## Bundle egui's default fonts (`egui/default_fonts`, about 1 MB). Turn it off if the app installs
 ## its own fonts with `egui::Context::set_fonts`; without any fonts egui draws boxes for text.
@@ -42,6 +42,10 @@ linuxfb = ["soft"]
 
 ## Touch, mouse and keyboard from /dev/input/event* (pure Rust, no libinput needed).
 input-evdev = ["dep:evdev"]
+
+## On-screen keyboard for touch-only devices: shown while a text field has the focus (and, by
+## default, no hardware keyboard is attached).
+osk = ["input-evdev"]
 
 ## Save app state and egui memory between runs (`App::save`, `Storage`), like eframe's
 ## `persistence`. Written atomically to a RON file, only when it changed.

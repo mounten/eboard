@@ -315,9 +315,16 @@ impl<P: Platform> Runner<'_, P> {
         let input = &self.input;
         let full_output = self.egui_ctx.run_pass(raw_input, |ctx| {
             app.logic(ctx, frame);
-            ctx.root_ui(|ui| app.ui(ui, frame));
+            ctx.root_ui(|ui| {
+                // The root Ui covers the whole screen; keep the app out of the safe-area insets
+                // (the on-screen keyboard). Always through this child Ui, so that widget ids
+                // don't change when the keyboard comes or goes.
+                let content = egui::UiBuilder::new().max_rect(ctx.content_rect());
+                ui.scope_builder(content, |ui| app.ui(ui, frame));
+            });
             #[cfg(feature = "input-evdev")]
             if let Some(input) = input {
+                input.paint_osk(ctx);
                 input.paint_cursor(ctx);
             }
         });
@@ -331,16 +338,23 @@ impl<P: Platform> Runner<'_, P> {
         } = full_output;
 
         #[cfg(feature = "input-evdev")]
-        if let Some(input) = &mut self.input {
-            input.handle_output(&platform_output);
-        }
+        let input_changed = self
+            .input
+            .as_mut()
+            .is_some_and(|input| input.handle_output(&platform_output));
         #[cfg(not(feature = "input-evdev"))]
-        let _ = platform_output;
+        let input_changed = {
+            let _ = platform_output;
+            false
+        };
 
         let mut close = std::mem::take(&mut self.frame.close_requested);
         let mut repaint_delay = Duration::MAX;
+        if input_changed {
+            repaint_delay = Duration::ZERO;
+        }
         if let Some(output) = viewport_output.get(&egui::ViewportId::ROOT) {
-            repaint_delay = output.repaint_delay;
+            repaint_delay = repaint_delay.min(output.repaint_delay);
             for command in &output.commands {
                 match command {
                     egui::ViewportCommand::Close => close = true,
@@ -402,6 +416,7 @@ impl<P: Platform> Runner<'_, P> {
         if let Some(input) = &mut self.input {
             // Modifier state reaches egui as `ModifiersChanged` events.
             raw_input.events = self.wake_filter.filter(input.take_events());
+            input.prepare_raw_input(&mut raw_input);
         }
         raw_input
     }

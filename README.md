@@ -49,7 +49,9 @@ The backend is picked at runtime. `auto` (default) tries `kms` first, then `viv-
 - `viv-fb` sets `FB_MULTI_BUFFER=2` (unless it is already set) for double buffering with vsync,
   like Qt does. That needs a framebuffer with at least twice the screen height of virtual space;
   eboard warns if it is smaller.
-- `linuxfb` copies only the changed area to the framebuffer and supports 16/24/32 bpp formats.
+- `linuxfb` redraws only the parts of the screen whose shapes changed since the last frame (a
+  blinking cursor or a changing label costs a fraction of a full frame), copies only those to the
+  framebuffer, and supports 16/24/32 bpp formats.
   With vsync on it double buffers (page flipping with `FBIOPAN_DISPLAY`) if the driver can pan
   and the framebuffer has room for two screens; otherwise it draws into the visible screen.
 - SIGINT/SIGTERM exit cleanly: `App::on_exit` is called and the display/console is restored.

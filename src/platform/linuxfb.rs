@@ -1,7 +1,8 @@
 //! Linux framebuffer platform (`/dev/fbN`), the equivalent of Qt's `linuxfb`.
 //!
-//! egui is rasterized on the CPU ([`SoftRenderer`]). Each frame, only the pixels that changed are
-//! converted (pixel format, rotation) and copied into the memory-mapped framebuffer. Works on any
+//! egui is rasterized on the CPU ([`SoftRenderer`]). Each frame, only the pixels that changed (looked
+//! for in the areas the renderer redrew) are converted (pixel format, rotation) and copied into the
+//! memory-mapped framebuffer. Works on any
 //! fbdev driver with packed truecolor pixels (16/24/32 bpp), e.g. the i.MX6 `mxsfb`/`mxc_ipuv3_fb`
 //! BSP drivers or DRM's fbdev emulation.
 //!
@@ -74,7 +75,7 @@ struct Flip {
     /// The page on screen (0 or 1).
     front: usize,
     /// Where the hidden page differs from the shown one (canvas coordinates).
-    stale: Option<PixelRect>,
+    stale: Vec<PixelRect>,
 }
 
 /// Bytes per line and size of the mapping.
@@ -165,7 +166,7 @@ fn setup_flip(
             Some(Flip {
                 var: front,
                 front: 0,
-                stale: None,
+                stale: Vec::new(),
             }),
         ),
         Err(why) => {
@@ -354,6 +355,7 @@ impl Platform for LinuxFbPlatform {
     }
 
     fn present(&mut self, renderer: &mut SoftRenderer) -> Result<(), Error> {
+        let redrawn = renderer.take_damage();
         let canvas = renderer.canvas();
         if self.rotation.logical_size(self.panel_size) != [canvas.width, canvas.height] {
             return Err(Error::Framebuffer(format!(
@@ -362,28 +364,30 @@ impl Platform for LinuxFbPlatform {
             )));
         }
 
-        let rect = if self.previous.len() != canvas.pixels.len() {
+        let changed: Vec<PixelRect> = if self.previous.len() != canvas.pixels.len() {
             self.previous = canvas.pixels.clone();
-            PixelRect::full([canvas.width, canvas.height])
+            vec![PixelRect::full([canvas.width, canvas.height])]
         } else {
-            match blit::damage(&mut self.previous, &canvas.pixels, canvas.width) {
-                Some(rect) => rect,
-                None => return Ok(()), // nothing changed on screen
-            }
+            redrawn
+                .into_iter()
+                .filter_map(|r| blit::damage(&mut self.previous, &canvas.pixels, canvas.width, r))
+                .collect()
         };
+        if changed.is_empty() {
+            return Ok(()); // nothing changed on screen
+        }
         // With page flipping, draw into the hidden page, which also lacks the last frame's changes.
-        let (rect, offset) = match &mut self.flip {
+        let (copy, offset) = match &mut self.flip {
             Some(flip) => {
-                let copy = flip.stale.map_or(rect, |stale| stale.union(rect));
-                flip.stale = Some(rect);
+                let copy = blit::merge_overlapping(flip.stale.iter().chain(&changed).copied());
+                flip.stale = changed;
                 let back = 1 - flip.front;
                 let yoffset = back as u32 * flip.var.yres;
                 let bpp = self.format.bytes_per_pixel;
                 (copy, area_offset(&flip.var, yoffset, self.stride, bpp))
             }
-            None => (rect, self.visible_offset),
+            None => (changed, self.visible_offset),
         };
-        let panel_rect = blit::logical_to_panel_rect(rect, self.rotation, self.panel_size);
 
         // Also makes sure the last pan took effect, so the hidden page isn't scanned out anymore.
         if self.vsync
@@ -404,19 +408,22 @@ impl Platform for LinuxFbPlatform {
             format: self.format,
             size: self.panel_size,
         };
-        blit::blit(
-            &canvas.pixels,
-            canvas.width,
-            self.rotation,
-            panel_rect,
-            &mut target,
-            &mut self.row,
-        );
-        log::trace!(
-            "Copied {}x{} px to the framebuffer",
-            panel_rect.x1 - panel_rect.x0,
-            panel_rect.y1 - panel_rect.y0
-        );
+        for &rect in &copy {
+            let panel_rect = blit::logical_to_panel_rect(rect, self.rotation, self.panel_size);
+            blit::blit(
+                &canvas.pixels,
+                canvas.width,
+                self.rotation,
+                panel_rect,
+                &mut target,
+                &mut self.row,
+            );
+            log::trace!(
+                "Copied {}x{} px to the framebuffer",
+                panel_rect.x1 - panel_rect.x0,
+                panel_rect.y1 - panel_rect.y0
+            );
+        }
 
         if let Some(flip) = &mut self.flip {
             let back = 1 - flip.front;

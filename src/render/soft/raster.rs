@@ -6,8 +6,11 @@
 //! Vertex positions are snapped to 1/16 pixel and edge functions are evaluated in integers, so
 //! triangles that share an edge (egui meshes are full of them) cover every pixel exactly once
 //! (top-left fill rule). Seams or double-blended edges would show on translucent shapes.
+//! Attributes are interpolated from the triangle's own bounds, not the clip rectangle's, so
+//! redrawing part of the canvas gives exactly the pixels a full redraw would.
 
-use egui::epaint::{Mesh, Vertex};
+use egui::Pos2;
+use egui::epaint::Vertex;
 use egui::{TextureFilter, TextureWrapMode};
 
 use super::{Canvas, Texture};
@@ -26,30 +29,55 @@ pub(crate) struct ClipRect {
     pub y1: i64,
 }
 
-pub(crate) fn draw_mesh(
-    canvas: &mut Canvas,
-    clip: ClipRect,
-    pixels_per_point: f32,
-    mesh: &Mesh,
-    texture: &Texture,
-) {
-    for indices in mesh.indices.as_chunks::<3>().0 {
-        let vertex = |i: u32| mesh.vertices.get(i as usize);
-        if let (Some(a), Some(b), Some(c)) =
-            (vertex(indices[0]), vertex(indices[1]), vertex(indices[2]))
-        {
-            draw_triangle(canvas, clip, pixels_per_point, [a, b, c], texture);
+impl ClipRect {
+    pub(crate) fn is_empty(self) -> bool {
+        self.x0 >= self.x1 || self.y0 >= self.y1
+    }
+
+    pub(crate) fn area(self) -> i64 {
+        if self.is_empty() {
+            0
+        } else {
+            (self.x1 - self.x0) * (self.y1 - self.y0)
         }
+    }
+
+    pub(crate) fn intersect(self, other: Self) -> Self {
+        Self {
+            x0: self.x0.max(other.x0),
+            y0: self.y0.max(other.y0),
+            x1: self.x1.min(other.x1),
+            y1: self.y1.min(other.y1),
+        }
+    }
+
+    /// The bounding box of both rectangles.
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            x0: self.x0.min(other.x0),
+            y0: self.y0.min(other.y0),
+            x1: self.x1.max(other.x1),
+            y1: self.y1.max(other.y1),
+        }
+    }
+
+    /// Overlapping, or less than `gap` pixels apart.
+    pub(crate) fn near(self, other: Self, gap: i64) -> bool {
+        self.x0 < other.x1 + gap
+            && other.x0 < self.x1 + gap
+            && self.y0 < other.y1 + gap
+            && other.y0 < self.y1 + gap
     }
 }
 
 type Point = (i64, i64);
 
+/// Rounds to the nearest subpixel, ties away from zero. Monotonic, so the extremes of a set of
+/// coordinates can be taken before or after it.
 fn to_subpixel(v: f32, pixels_per_point: f32) -> i64 {
-    // NaN becomes 0 through the saturating cast.
-    (v * pixels_per_point * SUBPIXEL as f32)
-        .clamp(-COORD_LIMIT, COORD_LIMIT)
-        .round() as i64
+    let v = (v * pixels_per_point * SUBPIXEL as f32).clamp(-COORD_LIMIT, COORD_LIMIT);
+    // Not `f32::round`, a libm call on x86 and armv7. NaN becomes 0 through the saturating cast.
+    (v + 0.5f32.copysign(v)) as i64
 }
 
 /// Twice the signed area of `(a, b, p)`; positive when `p` is on the inner side of `a → b` for
@@ -64,10 +92,12 @@ fn is_top_left(a: Point, b: Point) -> bool {
     (dy == 0 && dx > 0) || dy < 0
 }
 
+#[inline]
 fn div_floor(a: i64, b: i64) -> i64 {
     a.div_euclid(b)
 }
 
+#[inline]
 fn div_ceil(a: i64, b: i64) -> i64 {
     -(-a).div_euclid(b)
 }
@@ -117,19 +147,64 @@ enum Shading {
     Textured { filter: TextureFilter },
 }
 
-fn draw_triangle(
+fn subpixel_points(v: [&Vertex; 3], pixels_per_point: f32) -> [Point; 3] {
+    v.map(|v| {
+        (
+            to_subpixel(v.pos.x, pixels_per_point),
+            to_subpixel(v.pos.y, pixels_per_point),
+        )
+    })
+}
+
+/// The pixels whose centers lie in the box from `min` to `max` (subpixels).
+fn sample_bounds(min: Point, max: Point) -> ClipRect {
+    // Pixel x is sampled at x * SUBPIXEL + HALF_PIXEL.
+    ClipRect {
+        x0: div_ceil(min.0 - HALF_PIXEL, SUBPIXEL),
+        y0: div_ceil(min.1 - HALF_PIXEL, SUBPIXEL),
+        x1: div_floor(max.0 - HALF_PIXEL, SUBPIXEL) + 1,
+        y1: div_floor(max.1 - HALF_PIXEL, SUBPIXEL) + 1,
+    }
+}
+
+fn point_bounds(p: &[Point; 3]) -> ClipRect {
+    let min = |f: fn(&Point) -> i64| p.iter().map(f).min().unwrap_or(0);
+    let max = |f: fn(&Point) -> i64| p.iter().map(f).max().unwrap_or(0);
+    sample_bounds((min(|q| q.0), min(|q| q.1)), (max(|q| q.0), max(|q| q.1)))
+}
+
+/// The pixels that triangles between these vertices may cover, `None` if a position is NaN (or
+/// there are no vertices). Includes `draw_triangle`'s bounds of each of them, as the rounding to
+/// subpixels is monotonic.
+pub(crate) fn vertex_bounds(vertices: &[Vertex], pixels_per_point: f32) -> Option<ClipRect> {
+    let (mut min, mut max) = (
+        Pos2::new(f32::INFINITY, f32::INFINITY),
+        Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY),
+    );
+    for v in vertices {
+        if v.pos.any_nan() {
+            return None; // `min`/`max` would skip it, `draw_triangle` makes it 0
+        }
+        min = min.min(v.pos);
+        max = max.max(v.pos);
+    }
+    let sub = |p: Pos2| {
+        (
+            to_subpixel(p.x, pixels_per_point),
+            to_subpixel(p.y, pixels_per_point),
+        )
+    };
+    (!vertices.is_empty()).then(|| sample_bounds(sub(min), sub(max)))
+}
+
+pub(crate) fn draw_triangle(
     canvas: &mut Canvas,
     clip: ClipRect,
     pixels_per_point: f32,
     mut v: [&Vertex; 3],
     texture: &Texture,
 ) {
-    let mut p: [Point; 3] = v.map(|v| {
-        (
-            to_subpixel(v.pos.x, pixels_per_point),
-            to_subpixel(v.pos.y, pixels_per_point),
-        )
-    });
+    let mut p = subpixel_points(v, pixels_per_point);
     let mut area = edge_function(p[0], p[1], p[2]);
     if area == 0 {
         return;
@@ -141,13 +216,8 @@ fn draw_triangle(
         area = -area;
     }
 
-    // Pixel x is sampled at x * SUBPIXEL + HALF_PIXEL.
-    let min = |f: fn(&Point) -> i64| p.iter().map(f).min().unwrap_or(0);
-    let max = |f: fn(&Point) -> i64| p.iter().map(f).max().unwrap_or(0);
-    let x0 = div_ceil(min(|q| q.0) - HALF_PIXEL, SUBPIXEL).max(clip.x0);
-    let x1 = (div_floor(max(|q| q.0) - HALF_PIXEL, SUBPIXEL) + 1).min(clip.x1);
-    let y0 = div_ceil(min(|q| q.1) - HALF_PIXEL, SUBPIXEL).max(clip.y0);
-    let y1 = (div_floor(max(|q| q.1) - HALF_PIXEL, SUBPIXEL) + 1).min(clip.y1);
+    let bounds = point_bounds(&p);
+    let ClipRect { x0, y0, x1, y1 } = bounds.intersect(clip);
     if x0 >= x1 || y0 >= y1 {
         return;
     }
@@ -199,28 +269,18 @@ fn draw_triangle(
                 }
             }
             Shading::Gradient(texel) => {
-                let mut l1 = (w[1] + lo * edges[1].step_x) as f32 * inv_area;
-                let mut l2 = (w[2] + lo * edges[2].step_x) as f32 * inv_area;
-                let (dl1, dl2) = (
-                    edges[1].step_x as f32 * inv_area,
-                    edges[2].step_x as f32 * inv_area,
-                );
+                let mut weights = Weights::new(&edges, &w, bounds.x0 - x0, lo, inv_area);
                 for dst in span {
+                    let (l1, l2) = weights.next();
                     let color = lerp4(colors[0], d_color1, d_color2, l1, l2);
                     blend(dst, mul_f(color, texel));
-                    l1 += dl1;
-                    l2 += dl2;
                 }
             }
             Shading::Textured { filter } => {
-                let mut l1 = (w[1] + lo * edges[1].step_x) as f32 * inv_area;
-                let mut l2 = (w[2] + lo * edges[2].step_x) as f32 * inv_area;
-                let (dl1, dl2) = (
-                    edges[1].step_x as f32 * inv_area,
-                    edges[2].step_x as f32 * inv_area,
-                );
+                let mut weights = Weights::new(&edges, &w, bounds.x0 - x0, lo, inv_area);
                 let color0 = v[0].color.to_array();
                 for dst in span {
+                    let (l1, l2) = weights.next();
                     let u = uv[0][0] + l1 * d_uv1[0] + l2 * d_uv2[0];
                     let t = uv[0][1] + l1 * d_uv1[1] + l2 * d_uv2[1];
                     let texel = texture.sample(u, t, filter);
@@ -230,11 +290,44 @@ fn draw_triangle(
                         mul_f(lerp4(colors[0], d_color1, d_color2, l1, l2), texel)
                     };
                     blend(dst, src);
-                    l1 += dl1;
-                    l2 += dl2;
                 }
             }
         }
+    }
+}
+
+/// Barycentric weights of vertices 1 and 2 along a span. They start from the triangle's left
+/// bound, not from the span, so they don't depend on the clip.
+struct Weights {
+    base: [f32; 2],
+    step: [f32; 2],
+    /// Pixels from the triangle's left bound.
+    k: f32,
+}
+
+impl Weights {
+    /// `w`: this row's edge values at the clipped origin column; `bound_dx`: the triangle's left
+    /// bound and `lo`: the span start, both relative to that column.
+    fn new(edges: &[Edge; 3], w: &[i64; 3], bound_dx: i64, lo: i64, inv_area: f32) -> Self {
+        let at_bound = |i: usize| (w[i] + bound_dx * edges[i].step_x) as f32 * inv_area;
+        Self {
+            base: [at_bound(1), at_bound(2)],
+            step: [
+                edges[1].step_x as f32 * inv_area,
+                edges[2].step_x as f32 * inv_area,
+            ],
+            k: (lo - bound_dx) as f32,
+        }
+    }
+
+    #[inline]
+    fn next(&mut self) -> (f32, f32) {
+        let l = (
+            self.base[0] + self.k * self.step[0],
+            self.base[1] + self.k * self.step[1],
+        );
+        self.k += 1.0;
+        l
     }
 }
 
@@ -358,7 +451,25 @@ fn lerp4(base: [f32; 4], d1: [f32; 4], d2: [f32; 4], l1: f32, l2: f32) -> [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::epaint::Mesh;
     use egui::{Color32, Pos2, TextureOptions, pos2};
+
+    fn draw_mesh(
+        canvas: &mut Canvas,
+        clip: ClipRect,
+        pixels_per_point: f32,
+        mesh: &Mesh,
+        texture: &Texture,
+    ) {
+        for indices in mesh.indices.as_chunks::<3>().0 {
+            let vertex = |i: u32| mesh.vertices.get(i as usize);
+            if let (Some(a), Some(b), Some(c)) =
+                (vertex(indices[0]), vertex(indices[1]), vertex(indices[2]))
+            {
+                draw_triangle(canvas, clip, pixels_per_point, [a, b, c], texture);
+            }
+        }
+    }
 
     fn white_texture() -> Texture {
         Texture {

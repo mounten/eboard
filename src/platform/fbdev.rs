@@ -8,13 +8,17 @@ use std::path::Path;
 use crate::Error;
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
+#[cfg(feature = "linuxfb")]
 const FBIOPUT_VSCREENINFO: libc::c_ulong = 0x4601;
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
+#[cfg(feature = "linuxfb")]
 const FBIOPAN_DISPLAY: libc::c_ulong = 0x4606;
 const FBIOBLANK: libc::c_ulong = 0x4611;
 
+#[cfg(feature = "linuxfb")]
 const FB_ACTIVATE_NOW: u32 = 0;
 /// `vmode` flag: `yoffset` wraps around instead of panning.
+#[cfg(feature = "linuxfb")]
 const FB_VMODE_YWRAP: u32 = 256;
 
 const FB_BLANK_UNBLANK: libc::c_int = 0;
@@ -143,6 +147,7 @@ pub(crate) fn fix_screeninfo(fd: libc::c_int) -> std::io::Result<FbFixScreeninfo
 }
 
 /// Sets the screen info now. Returns what the driver made of it (it may round values).
+#[cfg(feature = "linuxfb")]
 pub(crate) fn put_var_screeninfo(
     fd: libc::c_int,
     var: &FbVarScreeninfo,
@@ -160,6 +165,7 @@ pub(crate) fn put_var_screeninfo(
 }
 
 /// Shows the part of the virtual framebuffer that starts at `var.xoffset`/`var.yoffset`.
+#[cfg(feature = "linuxfb")]
 pub(crate) fn pan_display(fd: libc::c_int, var: &FbVarScreeninfo) -> std::io::Result<()> {
     let mut var = FbVarScreeninfo {
         activate: FB_ACTIVATE_NOW,

@@ -23,7 +23,8 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 - `src/runner.rs`: run loop, generic over `Platform`. It sleeps in `poll()` on the platform fd (DRM
   page flips) plus an eventfd that egui's repaint callback and the signal handler write to.
   Platforms without vblank events are paced by `Platform::frame_interval`. No busy loop: idle CPU
-  must stay ~0.
+  must stay ~0. On exit, platforms with `Platform::CLEAR_ON_EXIT` (fbdev: nothing else redraws the
+  framebuffer unless fbcon is bound to it) get one empty frame in `App::clear_color`.
 - `src/signals.rs`: SIGINT/SIGTERM → clean exit (the second signal `_exit`s).
 - `src/idle.rs`: `IdleTimer` (blank deadline, part of the poll timeout) and `WakeFilter`, which
   swallows the gesture that wakes the display (until every touch/button/key pressed after waking

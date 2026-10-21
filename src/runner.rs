@@ -99,8 +99,27 @@ impl<P: Platform> Runner<'_, P> {
         #[cfg(feature = "persistence")]
         self.save(app);
         app.on_exit();
+        if P::CLEAR_ON_EXIT {
+            self.clear(app);
+        }
         self.egui_ctx.set_request_repaint_callback(|_| {});
         result
+    }
+
+    /// Presents an empty frame in the app's clear color, so the UI doesn't stay on screen after
+    /// exit. With a chroma-key mixer the clear color is the key, so the overlay disappears.
+    fn clear(&mut self, app: &mut dyn App) {
+        let clear_color = app.clear_color(&self.egui_ctx.global_style().visuals);
+        self.renderer.paint(
+            self.size_px,
+            self.pixels_per_point(),
+            clear_color,
+            &[],
+            &mut egui::TexturesDelta::default(),
+        );
+        if let Err(e) = self.platform.present(self.renderer) {
+            log::warn!("Clearing the display on exit: {e}");
+        }
     }
 
     fn event_loop(&mut self, app: &mut dyn App, signal: &RepaintSignal) -> Result<(), Error> {

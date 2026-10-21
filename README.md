@@ -245,6 +245,9 @@ board.
 - With `viv-fb` and `linuxfb`, the console is switched to graphics mode so its text and cursor
   don't draw over the UI. That needs root, or the app running on the console itself (e.g. a
   systemd service with `TTYPath=`).
+- On exit, `viv-fb` and `linuxfb` fill the framebuffer with `App::clear_color`, so the last frame
+  doesn't stay on screen (fbcon only redraws it if it is bound to that framebuffer). For an
+  overlay, that is the key color: the HUD disappears from the mixed video.
 
 ```sh
 RUST_LOG=info ./hello                              # egui's hello world; Quit button or Ctrl+C

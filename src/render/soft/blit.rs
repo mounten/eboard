@@ -155,6 +155,22 @@ impl PixelRect {
             y1: self.y1.max(other.y1),
         }
     }
+
+    fn overlaps(self, other: Self) -> bool {
+        self.x0 < other.x1 && other.x0 < self.x1 && self.y0 < other.y1 && other.y0 < self.y1
+    }
+}
+
+/// Unites overlapping rectangles until none overlap, so no pixel is copied twice.
+pub(crate) fn merge_overlapping(rects: impl IntoIterator<Item = PixelRect>) -> Vec<PixelRect> {
+    let mut out: Vec<PixelRect> = Vec::new();
+    for mut r in rects {
+        while let Some(i) = out.iter().position(|o| o.overlaps(r)) {
+            r = r.union(out.swap_remove(i));
+        }
+        out.push(r);
+    }
+    out
 }
 
 /// How a framebuffer can be double buffered (page flipping with `FBIOPAN_DISPLAY`).
@@ -188,29 +204,29 @@ pub(crate) fn paging(
     }
 }
 
-/// The bounding box of the pixels that differ between `previous` and `current`, or `None` if the
-/// frames are equal. Updates `previous` to `current` inside that box.
+/// The bounding box of the pixels inside `within` that differ between `previous` and `current`,
+/// or `None` if they are equal there. Updates `previous` to `current` inside that box.
 pub(crate) fn damage(
     previous: &mut [[u8; 4]],
     current: &[[u8; 4]],
     width: usize,
+    within: PixelRect,
 ) -> Option<PixelRect> {
     debug_assert_eq!(previous.len(), current.len());
     let mut rect: Option<PixelRect> = None;
-    for (y, (prev_row, cur_row)) in previous
-        .chunks_exact(width)
-        .zip(current.chunks_exact(width))
-        .enumerate()
-    {
+    for y in within.y0..within.y1 {
+        let row = y * width + within.x0..y * width + within.x1;
+        let (prev_row, cur_row) = (&previous[row.clone()], &current[row]);
         if prev_row == cur_row {
             continue;
         }
-        let first = prev_row
-            .iter()
-            .zip(cur_row)
-            .position(|(a, b)| a != b)
-            .unwrap_or(0);
-        let last = width
+        let first = within.x0
+            + prev_row
+                .iter()
+                .zip(cur_row)
+                .position(|(a, b)| a != b)
+                .unwrap_or(0);
+        let last = within.x1
             - prev_row
                 .iter()
                 .zip(cur_row)
@@ -358,13 +374,14 @@ mod tests {
     #[test]
     fn damage_finds_bounding_box_and_syncs() {
         let w = 5;
+        let all = PixelRect::full([w, 4]);
         let mut prev = vec![[0u8; 4]; w * 4];
         let mut cur = prev.clone();
-        assert_eq!(damage(&mut prev, &cur, w), None);
+        assert_eq!(damage(&mut prev, &cur, w, all), None);
         cur[w + 1] = [1; 4];
         cur[2 * w + 3] = [2; 4];
         assert_eq!(
-            damage(&mut prev, &cur, w),
+            damage(&mut prev, &cur, w, all),
             Some(PixelRect {
                 x0: 1,
                 y0: 1,
@@ -373,7 +390,33 @@ mod tests {
             })
         );
         assert_eq!(prev, cur);
-        assert_eq!(damage(&mut prev, &cur, w), None);
+        assert_eq!(damage(&mut prev, &cur, w, all), None);
+    }
+
+    #[test]
+    fn damage_only_looks_inside_the_rect() {
+        let w = 5;
+        let mut prev = vec![[0u8; 4]; w * 4];
+        let mut cur = prev.clone();
+        cur[w + 1] = [1; 4]; // inside
+        cur[3 * w + 4] = [2; 4]; // outside
+        let within = PixelRect {
+            x0: 1,
+            y0: 0,
+            x1: 3,
+            y1: 3,
+        };
+        assert_eq!(
+            damage(&mut prev, &cur, w, within),
+            Some(PixelRect {
+                x0: 1,
+                y0: 1,
+                x1: 2,
+                y1: 2
+            })
+        );
+        assert_eq!(prev[w + 1], [1; 4]);
+        assert_eq!(prev[3 * w + 4], [0; 4]);
     }
 
     #[test]
@@ -399,6 +442,17 @@ mod tests {
         assert_eq!(a.union(b), both);
         assert_eq!(b.union(a), both);
         assert_eq!(a.union(a), a);
+    }
+
+    #[test]
+    fn overlapping_rects_merge() {
+        let r = |x0, y0, x1, y1| PixelRect { x0, y0, x1, y1 };
+        // The third one joins the first two.
+        let merged = merge_overlapping([r(0, 0, 2, 2), r(4, 0, 6, 2), r(1, 1, 5, 3)]);
+        assert_eq!(merged, vec![r(0, 0, 6, 3)]);
+        // Touching is not overlapping.
+        let apart = merge_overlapping([r(0, 0, 2, 2), r(2, 0, 4, 2)]);
+        assert_eq!(apart.len(), 2);
     }
 
     #[test]

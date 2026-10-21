@@ -49,8 +49,9 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
     means "not Vivante", so `Auto` falls through), sets `FB_MULTI_BUFFER=2` when vsync is on,
     presents with `eglSwapBuffers` and paces with `frame_interval`.
   - `fbdev.rs`: `<linux/fb.h>` structs and ioctls, refresh rate, shared by `linuxfb` and `viv-fb`.
-  - `linuxfb.rs`: mmap of `/dev/fbN`. `present` copies only the damaged area of the canvas,
-    converting pixel format and rotating on the way. With vsync and two pages (raising
+  - `linuxfb.rs`: mmap of `/dev/fbN`. `present` copies only the damaged area of the canvas
+    (pixel diff, limited to the areas the renderer redrew), converting pixel format and rotating
+    on the way. With vsync and two pages (raising
     `yres_virtual` if `smem_len` allows, restored on drop) it draws into the hidden page and pans
     to it (`FBIOPAN_DISPLAY`); the hidden page gets this frame's and the last frame's damage. On
     drop the shown page is copied back to the startup `yoffset`. `blit::paging` decides (pure).
@@ -62,9 +63,17 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 - `src/render/`: `Renderer` trait.
   - `glow.rs`: wraps `egui_glow::Painter`. Software rotation renders into an FBO and blits it
     rotated.
+  - `soft/mod.rs`: `SoftRenderer`. The canvas keeps the last frame. Each mesh is split into shapes
+    (runs of triangles that only share vertices with each other, i.e. egui's shapes), hashed with
+    their clip rect, texture and vertices, and diffed against the last frame's; only the
+    rectangles around changed shapes are cleared and redrawn (`take_damage` hands them to the
+    platform). Font atlas updates only invalidate shapes that sample the changed texels.
+  - `soft/diff.rs`: Myers diff with an edit limit (else everything between the first and last
+    change counts) and merging of the changed bounds into a few rectangles (pure, tested).
   - `soft/raster.rs`: triangle rasterizer for epaint meshes. It must match egui_glow (gamma-space
     multiply, premultiplied blending). Integer edge functions + top-left rule, so shared edges are
-    never blended twice.
+    never blended twice. Interpolation starts at the triangle's bounds, not the clip, so a partial
+    redraw gives exactly the pixels of a full one (tested).
   - `soft/blit.rs`: damage detection, pixel formats (16/24/32 bpp), rotated copy (pure, tested).
 - `src/input/` (feature `input-evdev`): evdev input.
   - `touch.rs`, `pointer.rs`, `keyboard.rs`: pure decoders `(type, code, value)` → `egui::Event`,
@@ -185,7 +194,10 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
   90°, 60 fps animated at ~2.6 ms CPU per frame, ~0% idle). Not yet tried on the i.MX6. Page
   flipping is verified on the Pi with `drm_kms_helper.drm_fbdev_overalloc=200` on the kernel
   command line (two pages; the Pi normally has one, so it falls back to drawing into the visible
-  page).
+  page). Partial redraws (only changed shapes) are verified on the Pi, with and without page
+  flipping: `hello` while a finger moves (only the header's numbers change) takes 0.4 ms CPU per
+  frame instead of 17 ms; `stress_test` (everything changes) is about 5% slower than a plain full
+  redraw.
 - Input (evdev touch/mouse/keyboard, hotplug, keyboard grab) is done and verified on the Pi 5 with
   virtual devices from `tools/` (taps, drag, multi-touch, rotation 90°, typing, mouse cursor).
   Still to try: real finger touches on the Touch Display 2.
@@ -200,6 +212,6 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 - Input not done yet: keyboard layouts other than US (xkbcommon), touchpads, tslib calibration,
   hardware cursor plane, key repeat settings.
 - Later: GLES2 32-bit index workaround (i.MX6DL/S GC880 without `GL_OES_element_index_uint`), phase 4 extras (wgpu + `VK_KHR_display`, EGLDevice, multi-output).
-- Software renderer speedups not done yet: multithreaded bands, skipping unchanged regions
-  before rasterizing, fast path for axis-aligned quads (text).
+- Software renderer speedups not done yet: multithreaded bands, fast path for axis-aligned quads
+  (text).
 - Not done yet: clipboard/IME/cursor from `PlatformOutput`, hardware rotation other than 180°.

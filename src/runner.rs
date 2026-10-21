@@ -159,6 +159,11 @@ impl<P: Platform> Runner<'_, P> {
             let due = ready_at.is_some_and(|t| t <= now);
             // While the display is dark, repaint requests wait until it wakes up.
             if due && !blanked && self.platform.can_render() {
+                // Back-to-back frames (slow frames, egui's follow-up passes) never reach the poll
+                // below: read input that arrived meanwhile without waiting.
+                if self.wait(signal, Some(Duration::ZERO))? {
+                    self.idle.activity(Instant::now());
+                }
                 earliest_frame = self
                     .platform
                     .frame_interval()

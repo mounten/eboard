@@ -3,8 +3,9 @@
 //! It is not built from egui widgets: tapping a widget would take the focus away from the
 //! `TextEdit` being typed into. Instead [`Osk::filter`] sits between the input devices and egui.
 //! Presses on the keyboard never reach egui; releasing on the key that was pressed sends
-//! `Event::Text` or `Event::Key` instead, as a hardware keyboard would. Everything runs in egui
-//! points, so rotation and scale need no special handling.
+//! `Event::Text` or `Event::Key` instead, as a hardware keyboard would. Backspace acts on press
+//! and repeats while held; [`Osk::paint`] schedules the repaint that sends the next repeat.
+//! Everything runs in egui points, so rotation and scale need no special handling.
 //!
 //! The keyboard is shown while egui wants text input (`PlatformOutput::ime`), and in
 //! [`OskMode::Auto`] only while no hardware keyboard is attached. While it is shown, the bottom
@@ -27,6 +28,10 @@ const PADDING: f32 = 4.0;
 const ROW_UNITS: f32 = 10.0;
 /// A second tap on shift within this time (seconds) locks capitals.
 const DOUBLE_TAP: f64 = 0.4;
+/// Holding backspace this long (seconds) starts repeating it...
+const REPEAT_DELAY: f64 = 0.5;
+/// ...once per this interval.
+const REPEAT_INTERVAL: f64 = 0.05;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -196,6 +201,8 @@ pub(crate) struct Osk {
     pressed: Option<usize>,
     /// The pointer is still on the pressed key (releasing types it).
     on_pressed: bool,
+    /// Input time of the next backspace repeat, while backspace is held.
+    repeat_at: Option<f64>,
     /// The (not pressed) pointer is over the keyboard; egui was told it is gone.
     pointer_inside: bool,
     /// Touches that started on the keyboard.
@@ -257,7 +264,12 @@ impl Osk {
         for event in events {
             match &event {
                 Event::PointerMoved(pos) => match self.owner {
-                    Owner::Keyboard => self.on_pressed = hit(*pos) == self.pressed,
+                    Owner::Keyboard => {
+                        self.on_pressed = hit(*pos) == self.pressed;
+                        if !self.on_pressed {
+                            self.repeat_at = None;
+                        }
+                    }
                     Owner::Egui => out.push(event),
                     Owner::None if inside(*pos) => {
                         if !std::mem::replace(&mut self.pointer_inside, true) {
@@ -279,6 +291,12 @@ impl Osk {
                         self.owner = Owner::Keyboard;
                         self.pressed = hit(*pos);
                         self.on_pressed = true;
+                        if let Some(index) = self.pressed
+                            && keys[index].0 == Action::Backspace
+                        {
+                            self.press(Action::Backspace, time, &mut out);
+                            self.repeat_at = Some(time + REPEAT_DELAY);
+                        }
                     } else {
                         if self.owner == Owner::None {
                             self.owner = Owner::Egui;
@@ -294,10 +312,12 @@ impl Osk {
                     if self.owner == Owner::Keyboard {
                         if self.on_pressed
                             && let Some(index) = self.pressed
+                            && keys[index].0 != Action::Backspace
                         {
                             self.press(keys[index].0, time, &mut out);
                         }
                         self.pressed = None;
+                        self.repeat_at = None;
                     } else {
                         out.push(event);
                     }
@@ -312,6 +332,7 @@ impl Osk {
                 Event::PointerGone => {
                     self.owner = Owner::None;
                     self.pressed = None;
+                    self.repeat_at = None;
                     self.pointer_inside = false;
                     out.push(event);
                 }
@@ -333,22 +354,23 @@ impl Osk {
                 _ => out.push(event),
             }
         }
+        if let Some(at) = self.repeat_at
+            && time >= at
+        {
+            push_key(&mut out, Key::Backspace, true);
+            self.repeat_at = Some(time + REPEAT_INTERVAL);
+        }
         out
+    }
+
+    /// Seconds from `time` until the next backspace repeat is due, while backspace is held.
+    fn repeat_in(&self, time: f64) -> Option<f64> {
+        self.repeat_at.map(|at| (at - time).max(0.0))
     }
 
     /// A key was tapped.
     fn press(&mut self, action: Action, time: f64, out: &mut Vec<Event>) {
-        let key = |out: &mut Vec<Event>, key: Key| {
-            for pressed in [true, false] {
-                out.push(Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed,
-                    repeat: false,
-                    modifiers: Modifiers::default(),
-                });
-            }
-        };
+        let key = |out: &mut Vec<Event>, key: Key| push_key(out, key, false);
         match action {
             Action::Char(c) => {
                 let text = if self.shift == Shift::Off {
@@ -385,10 +407,14 @@ impl Osk {
         }
     }
 
-    /// Draws the keyboard over everything except the mouse cursor.
+    /// Draws the keyboard over everything except the mouse cursor, and asks for the repaint that
+    /// sends the next backspace repeat.
     pub(crate) fn paint(&self, ctx: &egui::Context) {
         if !self.visible {
             return;
+        }
+        if let Some(delay) = self.repeat_in(ctx.input(|i| i.time)) {
+            ctx.request_repaint_after_secs(delay as f32);
         }
         let screen = ctx.viewport_rect();
         let layout = Layout::new(screen.size());
@@ -442,6 +468,19 @@ impl Osk {
                 color,
             );
         }
+    }
+}
+
+/// A press and a release of `key`, as a hardware keyboard sends them.
+fn push_key(out: &mut Vec<Event>, key: Key, repeat: bool) {
+    for pressed in [true, false] {
+        out.push(Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat,
+            modifiers: Modifiers::default(),
+        });
     }
 }
 
@@ -699,6 +738,51 @@ mod tests {
         assert_eq!(typed(&tap(&mut osk, Action::Char('"'), 3.0)), "\"");
         tap(&mut osk, Action::Page, 4.0);
         assert_eq!(typed(&tap(&mut osk, Action::Char('q'), 5.0)), "q");
+    }
+
+    #[test]
+    fn backspace_repeats_while_held() {
+        let backspaces = |events: &[Event]| -> Vec<bool> {
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Key {
+                        key: Key::Backspace,
+                        pressed: true,
+                        repeat,
+                        ..
+                    } => Some(*repeat),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut osk = shown();
+        let bs = center(&osk, LANDSCAPE, Action::Backspace);
+        let a = center(&osk, LANDSCAPE, Action::Char('a'));
+
+        // Deletes on press, not again on release.
+        let events = osk.filter(vec![button(bs, true)], LANDSCAPE, 0.0);
+        assert_eq!(events, key_events(Key::Backspace));
+        assert_eq!(osk.repeat_in(0.1), Some(REPEAT_DELAY - 0.1));
+        assert_eq!(osk.filter(vec![], LANDSCAPE, 0.4), []);
+        assert_eq!(backspaces(&osk.filter(vec![], LANDSCAPE, 0.5)), [true]);
+        assert_eq!(osk.filter(vec![], LANDSCAPE, 0.52), []);
+        assert_eq!(backspaces(&osk.filter(vec![], LANDSCAPE, 0.56)), [true]);
+        let events = osk.filter(vec![button(bs, false)], LANDSCAPE, 0.58);
+        assert_eq!(events, []);
+        assert_eq!(osk.repeat_in(0.6), None);
+        assert_eq!(osk.filter(vec![], LANDSCAPE, 2.0), []);
+
+        // Sliding off stops the repeat, also when coming back.
+        osk.filter(vec![button(bs, true)], LANDSCAPE, 3.0);
+        osk.filter(vec![Event::PointerMoved(a)], LANDSCAPE, 3.1);
+        osk.filter(vec![Event::PointerMoved(bs)], LANDSCAPE, 3.2);
+        assert_eq!(osk.filter(vec![], LANDSCAPE, 4.0), []);
+        assert_eq!(osk.filter(vec![button(bs, false)], LANDSCAPE, 4.1), []);
+
+        // A tap is a single backspace (touch, as the decoder emits it).
+        assert_eq!(backspaces(&tap(&mut osk, Action::Backspace, 5.0)), [false]);
+        assert_eq!(osk.repeat_in(5.0), None);
     }
 
     #[test]

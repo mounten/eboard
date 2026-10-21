@@ -1,6 +1,6 @@
 name: Board builds
 
-# Cross-compiles the `hello` example for the board targets with the image in `docker/`
+# Cross-compiles all examples for the board targets with the image in `docker/`
 # (Ubuntu 20.04, glibc 2.31). Used by CI (artifacts) and by releases (attached to the release).
 
 on:
@@ -52,39 +52,63 @@ jobs:
           key: ${{ matrix.name }}
 
       - name: Build
-        run: cross build --release --locked --target ${{ matrix.target }} --example hello ${{ matrix.features }}
+        run: cross build --release --locked --target ${{ matrix.target }} --examples ${{ matrix.features }}
+
+      - name: List examples
+        run: |
+          examples=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind[] == "example") | .name' | sort | xargs)
+          echo "Examples: $examples"
+          echo "EXAMPLES=$examples" >> "$GITHUB_ENV"
 
       - name: Check glibc version and linked libraries
         env:
-          BIN: target/${{ matrix.target }}/release/examples/hello
+          DIR: target/${{ matrix.target }}/release/examples
           NO_GBM: ${{ matrix.no-gbm }}
         run: |
-          # Boards with older BSPs (JetPack 5, Pi OS Bullseye, Yocto) ship glibc 2.31.
-          max=$(readelf -V "$BIN" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-          echo "Highest glibc symbol version: $max"
-          if [ "$(printf '%s\n' "$max" GLIBC_2.31 | sort -V | tail -1)" != GLIBC_2.31 ]; then
-            echo "::error::hello needs $max, but boards may only have glibc 2.31"
-            exit 1
-          fi
-          needed=$(readelf -d "$BIN" | grep NEEDED)
-          echo "$needed"
-          if [ "$NO_GBM" = true ] && echo "$needed" | grep -q libgbm; then
-            echo "::error::this build must not link libgbm"
-            exit 1
-          fi
+          for example in $EXAMPLES; do
+            bin="$DIR/$example"
+            if [ ! -f "$bin" ]; then
+              echo "::error::$example was not built"
+              exit 1
+            fi
+            # Boards with older BSPs (JetPack 5, Pi OS Bullseye, Yocto) ship glibc 2.31.
+            max=$(readelf -V "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            echo "$example: highest glibc symbol version $max"
+            if [ "$(printf '%s\n' "$max" GLIBC_2.31 | sort -V | tail -1)" != GLIBC_2.31 ]; then
+              echo "::error::$example needs $max, but boards may only have glibc 2.31"
+              exit 1
+            fi
+            needed=$(readelf -d "$bin" | grep NEEDED)
+            echo "$needed"
+            if [ "$NO_GBM" = true ] && echo "$needed" | grep -q libgbm; then
+              echo "::error::$example must not link libgbm in this build"
+              exit 1
+            fi
+          done
 
       - name: Package
-        run: tar -czf eboard-hello-${{ matrix.name }}.tar.gz -C target/${{ matrix.target }}/release/examples hello
+        # One archive per board, the examples in a directory of the same name.
+        env:
+          DIR: eboard-examples-${{ matrix.name }}
+          SRC: target/${{ matrix.target }}/release/examples
+        run: |
+          mkdir "$DIR"
+          for example in $EXAMPLES; do
+            cp "$SRC/$example" "$DIR/"
+          done
+          tar -czf "$DIR.tar.gz" "$DIR"
+          tar -tzvf "$DIR.tar.gz"
 
       - if: inputs.release-tag == ''
         uses: actions/upload-artifact@v7
         with:
-          name: eboard-hello-${{ matrix.name }}
-          path: eboard-hello-${{ matrix.name }}.tar.gz
+          name: eboard-examples-${{ matrix.name }}
+          path: eboard-examples-${{ matrix.name }}.tar.gz
 
       - if: inputs.release-tag != ''
         name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release-tag }}
-        run: gh release upload "$TAG" eboard-hello-${{ matrix.name }}.tar.gz --clobber
+        run: gh release upload "$TAG" eboard-examples-${{ matrix.name }}.tar.gz --clobber

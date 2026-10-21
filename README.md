@@ -223,16 +223,18 @@ Cross-compiling with [cross](https://github.com/cross-rs/cross) (Docker or Podma
 
 ```sh
 # Raspberry Pi 4/5, Jetson, i.MX8
-cross build --release --target aarch64-unknown-linux-gnu --example hello
+cross build --release --target aarch64-unknown-linux-gnu --examples
 # 32-bit ARM
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello
+cross build --release --target armv7-unknown-linux-gnueabihf --examples
 # Boards without libgbm (e.g. i.MX6 with the Vivante fbdev BSP): Vivante GPU or CPU on /dev/fbN
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
+cross build --release --target armv7-unknown-linux-gnueabihf --examples --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
 # Intel/AMD boards and industrial PCs
-cross build --release --target x86_64-unknown-linux-gnu --example hello
+cross build --release --target x86_64-unknown-linux-gnu --examples
 ```
 
-Every GitHub release has the `hello` example for these targets attached, ready to copy to a board.
+Every GitHub release has all examples for these targets attached, one archive per board
+(`eboard-examples-aarch64.tar.gz`, `-armv7`, `-armv7-linuxfb`, `-x86_64`), ready to copy to a
+board.
 
 ## Running
 
@@ -245,13 +247,19 @@ Every GitHub release has the `hello` example for these targets attached, ready t
   systemd service with `TTYPath=`).
 
 ```sh
-RUST_LOG=info ./hello                              # interactive demo; Quit button or Ctrl+C
-RUST_LOG=info ./hello --animate                    # repaint every frame
+RUST_LOG=info ./hello                              # egui's hello world; Quit button or Ctrl+C
+RUST_LOG=info ./stress_test                        # grid of animated circles, repaints every frame
+RUST_LOG=info ./particles                          # bouncing particles, repaints every frame
 RUST_LOG=info ./hud                                # overlay HUD on a green key color
 EBOARD_ROTATION=90 RUST_LOG=info ./hello
 EBOARD_BACKEND=viv-fb RUST_LOG=info ./hello      # i.MX6 with the Vivante fbdev driver
 EBOARD_BACKEND=linuxfb RUST_LOG=info ./hello
 ```
+
+Every example shows the same header: backend, output, size, rotation, refresh rate, renderer,
+frame rate and CPU time per frame, and a Quit button. `stress_test` and `particles` are for
+finding a board's limits: raise the shape count until the frame rate drops below the refresh
+rate.
 
 ## Roadmap
 

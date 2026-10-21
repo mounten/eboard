@@ -71,6 +71,10 @@ rustix = { version = "1", features = ["event", "fs", "time"] }
 
 [dev-dependencies]
 env_logger = "0.11"
+# Image loaders for `hello` (Ferris). egui_extras turns off `image`'s default features, so the PNG
+# decoder has to be enabled here.
+egui_extras = { version = "0.37", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[example]]
 name = "hello"
@@ -80,4 +84,12 @@ required-features = ["default_fonts"]
 [[example]]
 name = "hud"
 # Text on the HUD plates needs fonts.
+required-features = ["default_fonts"]
+
+[[example]]
+name = "particles"
+required-features = ["default_fonts"]
+
+[[example]]
+name = "stress_test"
 required-features = ["default_fonts"]

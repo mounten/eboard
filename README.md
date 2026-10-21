@@ -50,6 +50,8 @@ The backend is picked at runtime. `auto` (default) tries `kms` first, then `viv-
   like Qt does. That needs a framebuffer with at least twice the screen height of virtual space;
   eboard warns if it is smaller.
 - `linuxfb` copies only the changed area to the framebuffer and supports 16/24/32 bpp formats.
+  With vsync on it double buffers (page flipping with `FBIOPAN_DISPLAY`) if the driver can pan
+  and the framebuffer has room for two screens; otherwise it draws into the visible screen.
 - SIGINT/SIGTERM exit cleanly: `App::on_exit` is called and the display/console is restored.
 - Optional idle blanking and backlight control, see below.
 

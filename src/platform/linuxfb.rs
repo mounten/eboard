@@ -4,16 +4,21 @@
 //! converted (pixel format, rotation) and copied into the memory-mapped framebuffer. Works on any
 //! fbdev driver with packed truecolor pixels (16/24/32 bpp), e.g. the i.MX6 `mxsfb`/`mxc_ipuv3_fb`
 //! BSP drivers or DRM's fbdev emulation.
+//!
+//! With vsync on, frames are double buffered if the driver can pan and the framebuffer holds two
+//! pages (raising the virtual height if the memory allows): a frame is drawn into the hidden page
+//! and shown with `FBIOPAN_DISPLAY`. The hidden page is one frame behind, so it gets this frame's
+//! changes plus the last one's.
 
 use std::fs::File;
 use std::os::fd::{AsRawFd as _, BorrowedFd};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::fbdev::{self, FbBitfield, fb_err};
+use super::fbdev::{self, FbBitfield, FbFixScreeninfo, FbVarScreeninfo, fb_err};
 use super::{Platform, Started, vt};
 use crate::render::soft::SoftRenderer;
-use crate::render::soft::blit::{self, Channel, PixelFormat, PixelRect, Target};
+use crate::render::soft::blit::{self, Channel, Paging, PixelFormat, PixelRect, Target};
 use crate::{Error, Options, Rotation};
 
 /// `_IOW('F', 0x20, __u32)`
@@ -41,9 +46,14 @@ pub(crate) struct LinuxFbPlatform {
     id: String,
     memory: *mut u8,
     memory_len: usize,
-    /// Byte offset of the visible page (panned framebuffers).
+    /// Byte offset of the visible page without page flipping (panned framebuffers).
     visible_offset: usize,
     stride: usize,
+    /// Screen info at startup, restored on drop.
+    original_var: FbVarScreeninfo,
+    /// The virtual height was raised for page flipping.
+    resized: bool,
+    flip: Option<Flip>,
     format: PixelFormat,
     panel_size: [usize; 2],
     rotation: Rotation,
@@ -55,6 +65,123 @@ pub(crate) struct LinuxFbPlatform {
     previous: Vec<[u8; 4]>,
     row: Vec<u8>,
     _vt: Option<vt::VtGuard>,
+}
+
+/// Double buffering: pages at `yoffset` 0 and `yres`.
+struct Flip {
+    /// Screen info for panning; `yoffset` is the shown page's.
+    var: FbVarScreeninfo,
+    /// The page on screen (0 or 1).
+    front: usize,
+    /// Where the hidden page differs from the shown one (canvas coordinates).
+    stale: Option<PixelRect>,
+}
+
+/// Bytes per line and size of the mapping.
+fn geometry(var: &FbVarScreeninfo, fix: &FbFixScreeninfo, bpp: usize) -> (usize, usize) {
+    let stride = match fix.line_length as usize {
+        0 => var.xres_virtual as usize * bpp,
+        n => n,
+    };
+    let memory_len = match fix.smem_len as usize {
+        0 => stride * var.yres_virtual as usize,
+        n => n,
+    };
+    (stride, memory_len)
+}
+
+/// Byte offset of the screen-sized area at `var.xoffset`, line `yoffset`.
+fn area_offset(var: &FbVarScreeninfo, yoffset: u32, stride: usize, bpp: usize) -> usize {
+    yoffset as usize * stride + var.xoffset as usize * bpp
+}
+
+/// Bytes from the first to the last visible pixel of a screen-sized area.
+fn area_len(var: &FbVarScreeninfo, stride: usize, bpp: usize) -> usize {
+    (var.yres as usize).saturating_sub(1) * stride + var.xres as usize * bpp
+}
+
+/// Sets up page flipping if the driver can pan and the framebuffer has, or can get, two pages.
+/// Returns the screen info and fixed info to use, whether the virtual height was raised, and
+/// the flip state (page 0 shown).
+fn setup_flip(
+    fd: libc::c_int,
+    path: &std::path::Path,
+    var: FbVarScreeninfo,
+    fix: FbFixScreeninfo,
+    bpp: usize,
+) -> (FbVarScreeninfo, FbFixScreeninfo, bool, Option<Flip>) {
+    let no_flip = |why: &str| log::debug!("{}: no page flipping: {why}", path.display());
+    let (stride, memory_len) = geometry(&var, &fix, bpp);
+    let paging = blit::paging(
+        var.yres as usize,
+        var.yres_virtual as usize,
+        fix.ypanstep as usize,
+        stride,
+        memory_len,
+    );
+    let (new_var, new_fix, resized) = match paging {
+        Paging::Single => {
+            no_flip("one page, or the driver cannot pan");
+            return (var, fix, false, None);
+        }
+        Paging::Flip => (var, fix, false),
+        Paging::Resize => {
+            let wanted = FbVarScreeninfo {
+                yres_virtual: var.yres * 2,
+                yoffset: 0,
+                ..var
+            };
+            let resized = fbdev::put_var_screeninfo(fd, &wanted)
+                .and_then(|new_var| Ok((new_var, fbdev::fix_screeninfo(fd)?)));
+            match resized {
+                Ok((new_var, new_fix)) => (new_var, new_fix, true),
+                Err(e) => {
+                    no_flip(&format!("raising the virtual height failed ({e})"));
+                    return (var, fix, false, None);
+                }
+            }
+        }
+    };
+
+    // The driver may have adjusted what we asked for.
+    let (stride, memory_len) = geometry(&new_var, &new_fix, bpp);
+    let front = FbVarScreeninfo {
+        yoffset: 0,
+        ..new_var
+    };
+    let fits = new_var.yres_virtual >= 2 * new_var.yres
+        && area_offset(&front, new_var.yres, stride, bpp) + area_len(&front, stride, bpp)
+            <= memory_len;
+    let panned = if fits {
+        fbdev::pan_display(fd, &front).map_err(|e| format!("FBIOPAN_DISPLAY failed ({e})"))
+    } else {
+        Err("two pages do not fit".to_owned())
+    };
+    match panned {
+        Ok(()) => (
+            front,
+            new_fix,
+            resized,
+            Some(Flip {
+                var: front,
+                front: 0,
+                stale: None,
+            }),
+        ),
+        Err(why) => {
+            no_flip(&why);
+            if !resized {
+                return (var, fix, false, None);
+            }
+            match fbdev::put_var_screeninfo(fd, &var).and_then(|_| fbdev::fix_screeninfo(fd)) {
+                Ok(fix) => (var, fix, false, None),
+                Err(e) => {
+                    log::warn!("{}: restoring the screen info: {e}", path.display());
+                    (new_var, new_fix, true, None)
+                }
+            }
+        }
+    }
 }
 
 impl LinuxFbPlatform {
@@ -99,23 +226,23 @@ impl LinuxFbPlatform {
 
         let bpp = format.bytes_per_pixel;
         let panel_size = [var.xres as usize, var.yres as usize];
-        let stride = match fix.line_length as usize {
-            0 => var.xres_virtual as usize * bpp,
-            n => n,
-        };
-        let memory_len = match fix.smem_len as usize {
-            0 => stride * var.yres_virtual as usize,
-            n => n,
-        };
-        let visible_offset = var.yoffset as usize * stride + var.xoffset as usize * bpp;
-        let needed =
-            visible_offset + panel_size[1].saturating_sub(1) * stride + panel_size[0] * bpp;
+        let (stride, memory_len) = geometry(&var, &fix, bpp);
+        let needed = area_offset(&var, var.yoffset, stride, bpp) + area_len(&var, stride, bpp);
         if panel_size.contains(&0) || needed > memory_len {
             return Err(fb_err(
                 &path,
                 &format!("{panel_size:?} px at stride {stride} does not fit {memory_len} bytes"),
             ));
         }
+
+        let original_var = var;
+        let (var, fix, resized, flip) = if options.vsync {
+            setup_flip(fd, &path, var, fix, bpp)
+        } else {
+            (var, fix, false, None)
+        };
+        let (stride, memory_len) = geometry(&var, &fix, bpp);
+        let visible_offset = area_offset(&var, var.yoffset, stride, bpp);
 
         // SAFETY: maps the framebuffer; unmapped in Drop.
         let memory = unsafe {
@@ -130,6 +257,9 @@ impl LinuxFbPlatform {
         };
         if memory == libc::MAP_FAILED {
             let e = std::io::Error::last_os_error();
+            if resized {
+                let _ = fbdev::put_var_screeninfo(fd, &original_var);
+            }
             return Err(fb_err(&path, &format!("mmap: {e}")));
         }
 
@@ -143,13 +273,14 @@ impl LinuxFbPlatform {
             .or_else(|| fbdev::physical_size_mm(&var));
         log::info!(
             "linuxfb: {} ({id}), {}x{} {} ({} bpp, stride {stride}), {refresh_hz:.1} Hz, vsync {}, \
-             physical size {}",
+             page flipping {}, physical size {}",
             path.display(),
             panel_size[0],
             panel_size[1],
             format.name(),
             var.bits_per_pixel,
             if vsync { "on" } else { "off" },
+            if flip.is_some() { "on" } else { "off" },
             physical_size_mm.map_or("unknown".to_owned(), |[w, h]| format!("{w}x{h} mm")),
         );
 
@@ -162,6 +293,9 @@ impl LinuxFbPlatform {
             memory_len,
             visible_offset,
             stride,
+            original_var,
+            resized,
+            flip,
             format,
             panel_size,
             rotation: options.output.rotation,
@@ -237,8 +371,21 @@ impl Platform for LinuxFbPlatform {
                 None => return Ok(()), // nothing changed on screen
             }
         };
+        // With page flipping, draw into the hidden page, which also lacks the last frame's changes.
+        let (rect, offset) = match &mut self.flip {
+            Some(flip) => {
+                let copy = flip.stale.map_or(rect, |stale| stale.union(rect));
+                flip.stale = Some(rect);
+                let back = 1 - flip.front;
+                let yoffset = back as u32 * flip.var.yres;
+                let bpp = self.format.bytes_per_pixel;
+                (copy, area_offset(&flip.var, yoffset, self.stride, bpp))
+            }
+            None => (rect, self.visible_offset),
+        };
         let panel_rect = blit::logical_to_panel_rect(rect, self.rotation, self.panel_size);
 
+        // Also makes sure the last pan took effect, so the hidden page isn't scanned out anymore.
         if self.vsync
             && let Err(e) = wait_for_vsync(self.file.as_raw_fd())
         {
@@ -246,12 +393,10 @@ impl Platform for LinuxFbPlatform {
             self.vsync = false;
         }
 
-        // SAFETY: the mapping is valid until Drop, and `new` checked that the visible page fits.
+        // SAFETY: the mapping is valid until Drop, and `new`/`setup_flip` checked that the
+        // visible page, or both pages, fit.
         let memory = unsafe {
-            std::slice::from_raw_parts_mut(
-                self.memory.add(self.visible_offset),
-                self.memory_len - self.visible_offset,
-            )
+            std::slice::from_raw_parts_mut(self.memory.add(offset), self.memory_len - offset)
         };
         let mut target = Target {
             memory,
@@ -272,6 +417,32 @@ impl Platform for LinuxFbPlatform {
             panel_rect.x1 - panel_rect.x0,
             panel_rect.y1 - panel_rect.y0
         );
+
+        if let Some(flip) = &mut self.flip {
+            let back = 1 - flip.front;
+            let var = FbVarScreeninfo {
+                yoffset: back as u32 * flip.var.yres,
+                ..flip.var
+            };
+            match fbdev::pan_display(self.file.as_raw_fd(), &var) {
+                Ok(()) => {
+                    flip.var = var;
+                    flip.front = back;
+                }
+                Err(e) => {
+                    log::warn!("FBIOPAN_DISPLAY failed ({e}), page flipping turned off");
+                    // Draw into the shown page from now on, all of it next time.
+                    self.visible_offset = area_offset(
+                        &flip.var,
+                        flip.var.yoffset,
+                        self.stride,
+                        self.format.bytes_per_pixel,
+                    );
+                    self.flip = None;
+                    self.previous.clear();
+                }
+            }
+        }
         Ok(())
     }
 
@@ -300,10 +471,47 @@ impl Platform for LinuxFbPlatform {
     }
 }
 
+impl LinuxFbPlatform {
+    /// After page flipping: puts the last frame (the clear-on-exit frame) where the screen was at
+    /// startup and shows that again, with the original virtual size.
+    fn restore_view(&mut self) {
+        let fd = self.file.as_raw_fd();
+        let bpp = self.format.bytes_per_pixel;
+        let shown = match &self.flip {
+            Some(flip) => area_offset(&flip.var, flip.var.yoffset, self.stride, bpp),
+            None => self.visible_offset,
+        };
+        let original = &self.original_var;
+        let original_offset = area_offset(original, original.yoffset, self.stride, bpp);
+        let len = area_len(original, self.stride, bpp);
+        if shown != original_offset && original_offset.max(shown) + len <= self.memory_len {
+            // SAFETY: both areas are inside the mapping (checked above); `copy` allows overlap.
+            unsafe {
+                std::ptr::copy(
+                    self.memory.add(shown),
+                    self.memory.add(original_offset),
+                    len,
+                );
+            }
+        }
+        let restored = if self.resized {
+            fbdev::put_var_screeninfo(fd, original).map(drop)
+        } else {
+            fbdev::pan_display(fd, original)
+        };
+        if let Err(e) = restored {
+            log::warn!("{}: restoring the screen info: {e}", self.path.display());
+        }
+    }
+}
+
 impl Drop for LinuxFbPlatform {
     fn drop(&mut self) {
         if self.blanked {
             fbdev::unblank(self.file.as_raw_fd());
+        }
+        if self.flip.is_some() || self.resized {
+            self.restore_view();
         }
         // SAFETY: mapped in `new` with this length.
         unsafe { libc::munmap(self.memory.cast(), self.memory_len) };

@@ -16,6 +16,8 @@
 //!   opaque plates and its edges blend with the plate instead of the key.
 //! - No shadows: they are translucent and would tint the key.
 
+mod common;
+
 use std::time::Instant;
 
 use eboard::egui;
@@ -24,9 +26,9 @@ use eboard::egui;
 const PLATE: egui::Color32 = egui::Color32::from_rgb(20, 24, 28);
 
 struct Hud {
+    header: common::Header,
     key: egui::Color32,
     started: Instant,
-    frames: u64,
     animate: bool,
     recording: bool,
 }
@@ -50,7 +52,6 @@ impl eboard::App for Hud {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eboard::Frame) {
-        self.frames += 1;
         let t = self.started.elapsed().as_secs_f32();
         let ctx = ui.ctx().clone();
 
@@ -86,11 +87,8 @@ impl eboard::App for Hud {
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 16.0))
             .show(&ctx, |ui| {
                 plate(ui, |ui| {
+                    self.header.show(ui, frame);
                     ui.label(format!("T+{t:.0} s"));
-                    ui.label(format!("Frames: {}", self.frames));
-                    if let Some(cpu) = frame.cpu_usage() {
-                        ui.label(format!("CPU per frame: {:.2} ms", cpu * 1000.0));
-                    }
                     if self.recording {
                         ui.colored_label(egui::Color32::from_rgb(255, 60, 60), "● REC");
                     }
@@ -104,9 +102,6 @@ impl eboard::App for Hud {
                     ui.horizontal(|ui| {
                         ui.toggle_value(&mut self.recording, "Record");
                         ui.checkbox(&mut self.animate, "Animate");
-                        if ui.button("Quit").clicked() {
-                            frame.close();
-                        }
                     });
                 });
             });
@@ -117,6 +112,10 @@ impl eboard::App for Hud {
             // Idle: only the clock changes, once a second.
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
+    }
+
+    fn on_exit(&mut self) {
+        log::info!("Exiting after {} frames", self.header.frames());
     }
 }
 
@@ -165,9 +164,9 @@ fn main() {
             style.visuals.popup_shadow = egui::Shadow::NONE;
         });
         Ok(Box::new(Hud {
+            header: common::Header::new("HUD"),
             key,
             started: Instant::now(),
-            frames: 0,
             animate,
             recording: false,
         }))

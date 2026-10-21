@@ -49,8 +49,8 @@ The board builds use [cross](https://github.com/cross-rs/cross) with the image i
 (Ubuntu 20.04, so the binaries run on glibc 2.31 and newer):
 
 ```sh
-cross build --release --target aarch64-unknown-linux-gnu --example hello
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello
+cross build --release --target aarch64-unknown-linux-gnu --examples
+cross build --release --target armv7-unknown-linux-gnueabihf --examples
 ```
 
 Changes to rendering or input should also be tried on a board. `tools/` has scripts to inject
@@ -64,8 +64,8 @@ Releases are made by [release-plz](https://release-plz.dev):
    based on the commits since the last release (checked with `cargo-semver-checks`) and adds
    them to `CHANGELOG.md`.
 2. Merging the release PR publishes the crate to crates.io, tags the commit `vX.Y.Z` and
-   creates a GitHub release with the changelog entry. The release also gets the `hello` example
-   built for `aarch64` and `armv7`, ready to copy to a board.
+   creates a GitHub release with the changelog entry. The release also gets all examples built
+   for every board target (one `eboard-examples-<board>.tar.gz` each), ready to copy to a board.
 
 While the version is `0.x`, breaking changes bump the minor version and everything else the
 patch version.

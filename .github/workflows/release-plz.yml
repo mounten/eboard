@@ -28,7 +28,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  # Attaches the `hello` example for every board target to the new GitHub release.
+  # Attaches the examples for every board target to the new GitHub release.
   binaries:
     needs: release
     if: needs.release.outputs.releases_created == 'true'

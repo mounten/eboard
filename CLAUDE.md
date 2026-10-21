@@ -75,8 +75,15 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
     the whole viewport), always, so widget ids don't change. Painted on `Order::Tooltip` with
     `Painter::new(.., viewport_rect)`; icons are shapes (the arrows aren't in egui's fonts).
     Layout/hit-test/filter are pure and tested; `osk_snapshot` renders `target/osk_snapshot.png`.
-- `examples/hello.rs`: interactive demo (button, slider, text field, touch markers). It is the
-  hardware smoke test; `--animate` repaints every frame.
+- `examples/common/mod.rs`: `Header`, shown at the top of every example (backend, output, size,
+  rotation, Hz, renderer, fps over the last 120 frames, CPU per frame, Quit button). Examples
+  include it with `mod common;`.
+- `examples/hello.rs`: egui's hello world (name, age slider, Increment, Ferris from
+  `examples/assets/ferris.png` through `egui_extras`' image loaders). It is the hardware smoke
+  test; idle, it never repaints. With `persistence`, name and age survive a restart.
+- `examples/stress_test.rs`, `examples/particles.rs`: benchmarks that repaint every frame (grid of
+  animated circles; bouncing particles with per-particle CPU work). Use them for "CPU per frame"
+  and tearing checks.
 - `examples/hud.rs`: overlay HUD on a key color (chroma key for an FPGA/video mixer): key from
   `App::clear_color`, frameless central panel, feathering off, text on opaque plates.
 - `tools/`: stdlib-only Python helpers for testing on a board over SSH: `uinput_touch.py`
@@ -120,11 +127,11 @@ cargo fmt --check
 Cross builds use cross-rs with Podman (`podman machine start` if it is stopped). The image comes from
 `docker/Dockerfile.cross-focal` (Ubuntu 20.04 + `libgbm-dev` for the target arch), see `Cross.toml`:
 ```sh
-cross build --release --target aarch64-unknown-linux-gnu --example hello
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello
+cross build --release --target aarch64-unknown-linux-gnu --examples
+cross build --release --target armv7-unknown-linux-gnueabihf --examples
 # i.MX6 without KMS/GBM: Vivante fbdev EGL or CPU framebuffer, no libgbm needed on the board
-cross build --release --target armv7-unknown-linux-gnueabihf --example hello --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
-cross build --release --target x86_64-unknown-linux-gnu --example hello
+cross build --release --target armv7-unknown-linux-gnueabihf --examples --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
+cross build --release --target x86_64-unknown-linux-gnu --examples
 cross test --target x86_64-unknown-linux-gnu   # run the tests on Linux (the image has libgbm)
 ```
 If cross build scripts fail with `GLIBC_x.y not found` after an image change, delete
@@ -142,9 +149,11 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 - `.github/workflows/ci.yml`: fmt, clippy for the host and both ARM targets plus feature combos,
   tests (the runner installs `libgbm-dev`), docs, a Windows/macOS build check, the board builds and
   a Conventional Commits check of PR titles (PRs are squash-merged).
-- `.github/workflows/boards.yml` (reusable): `cross build` of `hello` for aarch64, armv7,
-  armv7-linuxfb (`viv-fb` + `linuxfb`, must not link libgbm) and x86_64; fails if a binary needs glibc > 2.31. Uploads
-  artifacts in CI, or attaches them to the GitHub release.
+- `.github/workflows/boards.yml` (reusable): `cross build --examples` for aarch64, armv7,
+  armv7-linuxfb (`viv-fb` + `linuxfb`, must not link libgbm) and x86_64; fails if an example is
+  missing or needs glibc > 2.31. Packs all examples into `eboard-examples-<board>.tar.gz` and
+  uploads it as an artifact in CI, or attaches it to the GitHub release. New examples are picked
+  up automatically (`cargo metadata`).
 - `.github/workflows/release-plz.yml` + `release-plz.toml`: release PR on every push to `main`;
   merging it publishes to crates.io, tags `vX.Y.Z` and creates the GitHub release. Needs the
   secrets `CARGO_REGISTRY_TOKEN` and `RELEASE_PLZ_TOKEN`.

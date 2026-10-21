@@ -32,6 +32,11 @@ pub(crate) trait Platform {
     /// The renderer that draws for this platform.
     type Renderer: Renderer;
 
+    /// The display keeps showing our last frame after exit (fbdev: the framebuffer is just
+    /// memory, and nothing redraws it unless fbcon is bound to it). The runner then presents an
+    /// empty frame in the app's clear color before tearing down.
+    const CLEAR_ON_EXIT: bool = false;
+
     /// Short backend name for logs and [`crate::ScreenInfo::backend`].
     fn name(&self) -> &'static str;
 

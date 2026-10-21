@@ -189,6 +189,8 @@ fn wait_for_vsync(fd: libc::c_int) -> std::io::Result<()> {
 impl Platform for LinuxFbPlatform {
     type Renderer = SoftRenderer;
 
+    const CLEAR_ON_EXIT: bool = true;
+
     fn name(&self) -> &'static str {
         "linuxfb"
     }

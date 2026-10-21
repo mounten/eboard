@@ -279,6 +279,8 @@ fn galcore_hint() -> &'static str {
 impl Platform for VivFbPlatform {
     type Renderer = GlowRenderer;
 
+    const CLEAR_ON_EXIT: bool = true;
+
     fn name(&self) -> &'static str {
         "viv-fb"
     }

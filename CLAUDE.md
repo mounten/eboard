@@ -23,7 +23,8 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 - `src/runner.rs`: run loop, generic over `Platform`. It sleeps in `poll()` on the platform fd (DRM
   page flips) plus an eventfd that egui's repaint callback and the signal handler write to.
   Platforms without vblank events are paced by `Platform::frame_interval`. No busy loop: idle CPU
-  must stay ~0.
+  must stay ~0. On exit, platforms with `Platform::CLEAR_ON_EXIT` (fbdev: nothing else redraws the
+  framebuffer unless fbcon is bound to it) get one empty frame in `App::clear_color`.
 - `src/signals.rs`: SIGINT/SIGTERM → clean exit (the second signal `_exit`s).
 - `src/idle.rs`: `IdleTimer` (blank deadline, part of the poll timeout) and `WakeFilter`, which
   swallows the gesture that wakes the display (until every touch/button/key pressed after waking
@@ -164,9 +165,12 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 ## Status
 - Phase 1 (KMS + EGL + glow, rotation, event-driven repaint, signals) is done and verified on a
   Raspberry Pi 5 + Touch Display 2, including `EBOARD_ROTATION=90`.
-- `viv-fb` (Vivante fbdev EGL) is written from the i.MX6 SDK's `EGL/eglvivante.h` but not yet
-  run on the i.MX6. On the Pi it must fail with "not the Vivante fbdev EGL" and let `Auto`
-  fall through.
+- `viv-fb` (Vivante fbdev EGL) is verified on an i.MX6QP (GC2000+, GLES 3.1, driver 6.4.11,
+  `/dev/fb0` 1024x768x32, `FB_MULTI_BUFFER=2`, `Auto` picks it). That fb runs at 24 Hz (65 MHz
+  pixel clock, wide horizontal blanking) into an FPGA video mixer that chroma-keys the UI over a
+  24 Hz camera feed (see `examples/hud.rs`); eboard paces to it. Touch comes over CAN (apps feed
+  it through `App::raw_input_hook`), so there is no evdev input on that board. On the Pi
+  `viv-fb` must fail with "not the Vivante fbdev EGL" and let `Auto` fall through.
 - `linuxfb` + software renderer is done and verified on the Pi 5 through DRM's fbdev emulation (0° and
   90°, 60 fps animated at ~2.6 ms CPU per frame, ~0% idle). Not yet tried on the i.MX6.
 - Input (evdev touch/mouse/keyboard, hotplug, keyboard grab) is done and verified on the Pi 5 with

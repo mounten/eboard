@@ -50,7 +50,10 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
     presents with `eglSwapBuffers` and paces with `frame_interval`.
   - `fbdev.rs`: `<linux/fb.h>` structs and ioctls, refresh rate, shared by `linuxfb` and `viv-fb`.
   - `linuxfb.rs`: mmap of `/dev/fbN`. `present` copies only the damaged area of the canvas,
-    converting pixel format and rotating on the way.
+    converting pixel format and rotating on the way. With vsync and two pages (raising
+    `yres_virtual` if `smem_len` allows, restored on drop) it draws into the hidden page and pans
+    to it (`FBIOPAN_DISPLAY`); the hidden page gets this frame's and the last frame's damage. On
+    drop the shown page is copied back to the startup `yoffset`. `blit::paging` decides (pure).
   - `backlight.rs`: `/sys/class/backlight` device choice (firmware > platform > raw) and
     brightness `0..=1` ↔ raw (pure, tested; std only, so it builds on every host). Blanking does
     not write `bl_power`: DPMS/FBIOBLANK switch the backlight off in the kernel (checked on the Pi).
@@ -179,7 +182,10 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
   it through `App::raw_input_hook`), so there is no evdev input on that board. On the Pi
   `viv-fb` must fail with "not the Vivante fbdev EGL" and let `Auto` fall through.
 - `linuxfb` + software renderer is done and verified on the Pi 5 through DRM's fbdev emulation (0° and
-  90°, 60 fps animated at ~2.6 ms CPU per frame, ~0% idle). Not yet tried on the i.MX6.
+  90°, 60 fps animated at ~2.6 ms CPU per frame, ~0% idle). Not yet tried on the i.MX6. Page
+  flipping is verified on the Pi with `drm_kms_helper.drm_fbdev_overalloc=200` on the kernel
+  command line (two pages; the Pi normally has one, so it falls back to drawing into the visible
+  page).
 - Input (evdev touch/mouse/keyboard, hotplug, keyboard grab) is done and verified on the Pi 5 with
   virtual devices from `tools/` (taps, drag, multi-touch, rotation 90°, typing, mouse cursor).
   Still to try: real finger touches on the Touch Display 2.
@@ -196,5 +202,4 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 - Later: GLES2 32-bit index workaround (i.MX6DL/S GC880 without `GL_OES_element_index_uint`), phase 4 extras (wgpu + `VK_KHR_display`, EGLDevice, multi-output).
 - Software renderer speedups not done yet: multithreaded bands, skipping unchanged regions
   before rasterizing, fast path for axis-aligned quads (text).
-- Not done yet: clipboard/IME/cursor from `PlatformOutput`, hardware rotation other than 180°,
-  page flipping on fbdev (`FBIOPAN_DISPLAY`).
+- Not done yet: clipboard/IME/cursor from `PlatformOutput`, hardware rotation other than 180°.

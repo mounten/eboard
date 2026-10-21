@@ -145,6 +145,47 @@ impl PixelRect {
             y1: h,
         }
     }
+
+    /// The bounding box of both rectangles.
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            x0: self.x0.min(other.x0),
+            y0: self.y0.min(other.y0),
+            x1: self.x1.max(other.x1),
+            y1: self.y1.max(other.y1),
+        }
+    }
+}
+
+/// How a framebuffer can be double buffered (page flipping with `FBIOPAN_DISPLAY`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Paging {
+    /// One page: frames are drawn into the visible page.
+    Single,
+    /// The virtual height holds two pages.
+    Flip,
+    /// The memory holds two pages, but the virtual height has to be raised first.
+    Resize,
+}
+
+/// Decides the [`Paging`] for `yres` visible lines of `stride` bytes. `ypanstep` 0 means the
+/// driver cannot pan.
+pub(crate) fn paging(
+    yres: usize,
+    yres_virtual: usize,
+    ypanstep: usize,
+    stride: usize,
+    memory_len: usize,
+) -> Paging {
+    if yres == 0 || ypanstep == 0 || !yres.is_multiple_of(ypanstep) {
+        Paging::Single
+    } else if yres_virtual >= 2 * yres {
+        Paging::Flip
+    } else if memory_len >= 2 * yres * stride {
+        Paging::Resize
+    } else {
+        Paging::Single
+    }
 }
 
 /// The bounding box of the pixels that differ between `previous` and `current`, or `None` if the
@@ -333,6 +374,50 @@ mod tests {
         );
         assert_eq!(prev, cur);
         assert_eq!(damage(&mut prev, &cur, w), None);
+    }
+
+    #[test]
+    fn rect_union() {
+        let a = PixelRect {
+            x0: 1,
+            y0: 5,
+            x1: 3,
+            y1: 6,
+        };
+        let b = PixelRect {
+            x0: 2,
+            y0: 0,
+            x1: 8,
+            y1: 2,
+        };
+        let both = PixelRect {
+            x0: 1,
+            y0: 0,
+            x1: 8,
+            y1: 6,
+        };
+        assert_eq!(a.union(b), both);
+        assert_eq!(b.union(a), both);
+        assert_eq!(a.union(a), a);
+    }
+
+    #[test]
+    fn paging_needs_panning_and_two_pages() {
+        let (yres, stride) = (768, 4096);
+        let page = yres * stride;
+        // The i.MX6 BSP's triple-buffered fb0.
+        assert_eq!(paging(yres, 3 * yres, 1, stride, 3 * page), Paging::Flip);
+        assert_eq!(paging(yres, 2 * yres, 1, stride, 2 * page), Paging::Flip);
+        // Enough memory, but a one-page virtual size.
+        assert_eq!(paging(yres, yres, 1, stride, 2 * page), Paging::Resize);
+        // One page (DRM fbdev emulation without overallocation).
+        assert_eq!(paging(yres, yres, 1, stride, page), Paging::Single);
+        assert_eq!(paging(yres, yres, 1, stride, 2 * page - 1), Paging::Single);
+        // No panning, or pages that don't start on a pan step.
+        assert_eq!(paging(yres, 2 * yres, 0, stride, 2 * page), Paging::Single);
+        assert_eq!(paging(yres, 2 * yres, 5, stride, 2 * page), Paging::Single);
+        assert_eq!(paging(yres, 2 * yres, 8, stride, 2 * page), Paging::Flip);
+        assert_eq!(paging(0, 0, 1, stride, page), Paging::Single);
     }
 
     #[test]

@@ -8,8 +8,18 @@ use std::path::Path;
 use crate::Error;
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
+#[cfg(feature = "linuxfb")]
+const FBIOPUT_VSCREENINFO: libc::c_ulong = 0x4601;
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
+#[cfg(feature = "linuxfb")]
+const FBIOPAN_DISPLAY: libc::c_ulong = 0x4606;
 const FBIOBLANK: libc::c_ulong = 0x4611;
+
+#[cfg(feature = "linuxfb")]
+const FB_ACTIVATE_NOW: u32 = 0;
+/// `vmode` flag: `yoffset` wraps around instead of panning.
+#[cfg(feature = "linuxfb")]
+const FB_VMODE_YWRAP: u32 = 256;
 
 const FB_BLANK_UNBLANK: libc::c_int = 0;
 const FB_BLANK_POWERDOWN: libc::c_int = 4;
@@ -108,12 +118,7 @@ pub(crate) fn open_and_query(
     let fd = file.as_raw_fd();
 
     let var = var_screeninfo(fd).map_err(|e| fb_err(path, &format!("FBIOGET_VSCREENINFO: {e}")))?;
-    let mut fix: FbFixScreeninfo = unsafe { std::mem::zeroed() };
-    // SAFETY: the ioctl fills the struct, which matches the kernel ABI.
-    if unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO as _, &mut fix) } != 0 {
-        let e = std::io::Error::last_os_error();
-        return Err(fb_err(path, &format!("FBIOGET_FSCREENINFO: {e}")));
-    }
+    let fix = fix_screeninfo(fd).map_err(|e| fb_err(path, &format!("FBIOGET_FSCREENINFO: {e}")))?;
     let id =
         String::from_utf8_lossy(fix.id.split(|&b| b == 0).next().unwrap_or_default()).into_owned();
     log::debug!("{}: {id}, {var:?}", path.display());
@@ -125,6 +130,51 @@ pub(crate) fn var_screeninfo(fd: libc::c_int) -> std::io::Result<FbVarScreeninfo
     // SAFETY: the ioctl fills the struct, which matches the kernel ABI.
     if unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO as _, &mut var) } == 0 {
         Ok(var)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+pub(crate) fn fix_screeninfo(fd: libc::c_int) -> std::io::Result<FbFixScreeninfo> {
+    // SAFETY: plain integers and arrays, all-zero is valid.
+    let mut fix: FbFixScreeninfo = unsafe { std::mem::zeroed() };
+    // SAFETY: the ioctl fills the struct, which matches the kernel ABI.
+    if unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO as _, &mut fix) } == 0 {
+        Ok(fix)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Sets the screen info now. Returns what the driver made of it (it may round values).
+#[cfg(feature = "linuxfb")]
+pub(crate) fn put_var_screeninfo(
+    fd: libc::c_int,
+    var: &FbVarScreeninfo,
+) -> std::io::Result<FbVarScreeninfo> {
+    let mut var = FbVarScreeninfo {
+        activate: FB_ACTIVATE_NOW,
+        ..*var
+    };
+    // SAFETY: the ioctl reads and updates the struct, which matches the kernel ABI.
+    if unsafe { libc::ioctl(fd, FBIOPUT_VSCREENINFO as _, &mut var) } == 0 {
+        Ok(var)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Shows the part of the virtual framebuffer that starts at `var.xoffset`/`var.yoffset`.
+#[cfg(feature = "linuxfb")]
+pub(crate) fn pan_display(fd: libc::c_int, var: &FbVarScreeninfo) -> std::io::Result<()> {
+    let mut var = FbVarScreeninfo {
+        activate: FB_ACTIVATE_NOW,
+        vmode: var.vmode & !FB_VMODE_YWRAP,
+        ..*var
+    };
+    // SAFETY: the ioctl reads the struct, which matches the kernel ABI.
+    if unsafe { libc::ioctl(fd, FBIOPAN_DISPLAY as _, &mut var) } == 0 {
+        Ok(())
     } else {
         Err(std::io::Error::last_os_error())
     }

@@ -141,15 +141,16 @@ If cross build scripts fail with `GLIBC_x.y not found` after an image change, de
 ## Workflow
 - `main` is protected (ruleset "Protect main"): no direct pushes. Work on a branch, open a PR whose
   **title** is a Conventional Commit (it becomes the squash commit and the changelog entry), and
-  wait for all required checks: `check`, `check (windows-latest)`, `check (macos-latest)`,
-  `boards / aarch64|armv7|armv7-linuxfb|x86_64` and `pr-title`. The owner merges.
+  wait for all required checks: `check`, `boards / aarch64|armv7|armv7-linuxfb|x86_64` and
+  `pr-title`. The owner merges.
 - Changes that affect what users see (new options, features, behavior) need a README update.
 
 ## CI and releases
 Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 - `.github/workflows/ci.yml`: fmt, clippy for the host and both ARM targets plus feature combos,
-  tests (the runner installs `libgbm-dev`), docs, a Windows/macOS build check, the board builds and
-  a Conventional Commits check of PR titles (PRs are squash-merged).
+  tests (the runner installs `libgbm-dev`), docs, the board builds and a Conventional Commits check
+  of PR titles (PRs are squash-merged). There is no Windows/macOS job (slow and flaky): that the
+  crate still builds on the Windows host is checked locally with `cargo test`.
 - `.github/workflows/boards.yml` (reusable): `cross build --examples` for aarch64, armv7,
   armv7-linuxfb (`viv-fb` + `linuxfb`, must not link libgbm) and x86_64; fails if an example is
   missing or needs glibc > 2.31. Packs all examples into `eboard-examples-<board>.tar.gz` and

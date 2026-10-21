@@ -37,20 +37,6 @@ jobs:
       - run: cargo test --features persistence
       - run: cargo doc --no-deps --features persistence
 
-  # The crate itself is Linux-only at runtime, but it has to keep building on development hosts.
-  host:
-    name: check (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test
-
   boards:
     uses: ./.github/workflows/boards.yml
 

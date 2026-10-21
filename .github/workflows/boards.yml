@@ -26,15 +26,10 @@ jobs:
           - name: aarch64
             target: aarch64-unknown-linux-gnu
             features: ""
-          # 32-bit ARM with KMS/GBM (e.g. i.MX6 with etnaviv, 32-bit Raspberry Pi OS)
+          # 32-bit ARM: i.MX6 (etnaviv KMS, Vivante fbdev or plain framebuffer), 32-bit Pi OS
           - name: armv7
             target: armv7-unknown-linux-gnueabihf
             features: ""
-          # 32-bit ARM without libgbm (e.g. i.MX6 BSPs with the Vivante fbdev driver)
-          - name: armv7-linuxfb
-            target: armv7-unknown-linux-gnueabihf
-            features: --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
-            no-gbm: true
           # Intel/AMD boards and industrial PCs
           - name: x86_64
             target: x86_64-unknown-linux-gnu
@@ -64,7 +59,6 @@ jobs:
       - name: Check glibc version and linked libraries
         env:
           DIR: target/${{ matrix.target }}/release/examples
-          NO_GBM: ${{ matrix.no-gbm }}
         run: |
           for example in $EXAMPLES; do
             bin="$DIR/$example"
@@ -81,8 +75,9 @@ jobs:
             fi
             needed=$(readelf -d "$bin" | grep NEEDED)
             echo "$needed"
-            if [ "$NO_GBM" = true ] && echo "$needed" | grep -q libgbm; then
-              echo "::error::$example must not link libgbm in this build"
+            # libgbm is loaded at runtime, so the same binary starts on boards without it.
+            if echo "$needed" | grep -q libgbm; then
+              echo "::error::$example must not link libgbm"
               exit 1
             fi
           done

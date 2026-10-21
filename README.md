@@ -214,9 +214,11 @@ so:
 
 ## Building
 
-The crate targets `*-linux-gnu` (vendor GPU libraries are glibc-linked). EGL and GLES are loaded at
-runtime with `dlopen` (including Vivante's fbdev functions for `viv-fb`); the only library linked at
-build time is `libgbm` (`kms` feature).
+The crate targets `*-linux-gnu` (vendor GPU libraries are glibc-linked). Nothing native is linked
+at build time: libgbm, EGL and GLES are loaded at runtime with `dlopen` (including Vivante's fbdev
+functions for `viv-fb`). So one binary per architecture runs on every board: where libgbm is
+missing (e.g. i.MX6 with the Vivante fbdev BSP), `kms` fails to start and `auto` moves on to
+`viv-fb` and `linuxfb`.
 
 Cross-compiling with [cross](https://github.com/cross-rs/cross) (Docker or Podman). The image in
 `docker/` is based on Ubuntu 20.04 so the binaries run on glibc 2.31 and newer:
@@ -224,17 +226,16 @@ Cross-compiling with [cross](https://github.com/cross-rs/cross) (Docker or Podma
 ```sh
 # Raspberry Pi 4/5, Jetson, i.MX8
 cross build --release --target aarch64-unknown-linux-gnu --examples
-# 32-bit ARM
+# 32-bit ARM (i.MX6, 32-bit Raspberry Pi OS)
 cross build --release --target armv7-unknown-linux-gnueabihf --examples
-# Boards without libgbm (e.g. i.MX6 with the Vivante fbdev BSP): Vivante GPU or CPU on /dev/fbN
+# Optional: a smaller binary without `kms` for boards that can't use it (i.MX6 Vivante fbdev BSP)
 cross build --release --target armv7-unknown-linux-gnueabihf --examples --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
 # Intel/AMD boards and industrial PCs
 cross build --release --target x86_64-unknown-linux-gnu --examples
 ```
 
 Every GitHub release has all examples for these targets attached, one archive per board
-(`eboard-examples-aarch64.tar.gz`, `-armv7`, `-armv7-linuxfb`, `-x86_64`), ready to copy to a
-board.
+(`eboard-examples-aarch64.tar.gz`, `-armv7`, `-x86_64`), ready to copy to a board.
 
 ## Running
 

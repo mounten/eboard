@@ -30,7 +30,8 @@ glow = ["dep:egui_glow"]
 soft = []
 
 ## DRM/KMS + GBM + EGL display backend (Mesa, NVIDIA Jetson NVGBM, i.MX8 Vivante/etnaviv, ...).
-kms = ["glow", "dep:drm", "dep:gbm", "dep:khronos-egl", "dep:libloading"]
+## libgbm is loaded at runtime: without it, `Backend::Auto` falls through to the next backend.
+kms = ["glow", "dep:drm", "dep:khronos-egl", "dep:libloading"]
 
 ## Vivante GPU on the Linux framebuffer through NXP's fbdev EGL (`fbGetDisplayByIndex`), like Qt's
 ## eglfs_viv. For i.MX6 BSPs with the Vivante driver but without KMS/GBM. Links no native libraries.
@@ -60,9 +61,7 @@ serde = { version = "1", optional = true }
 thiserror = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Must match the drm version used by `gbm`.
 drm = { version = "0.14", optional = true }
-gbm = { version = "0.18", default-features = false, features = ["drm-support"], optional = true }
 khronos-egl = { version = "6.0", default-features = false, features = ["1_5", "dynamic"], optional = true }
 libloading = { version = "0.8", optional = true }
 evdev = { version = "0.13", optional = true }

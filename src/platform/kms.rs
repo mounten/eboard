@@ -5,6 +5,9 @@
 //!
 //! Frame flow: `eglSwapBuffers` → `gbm_surface_lock_front_buffer` → DRM framebuffer (cached per
 //! buffer object) → page flip. The previous buffer goes back to GBM when the flip event arrives.
+//!
+//! libgbm is loaded at runtime (see [`super::gbm`]): without it, this platform fails to open and
+//! `Backend::Auto` moves on.
 
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
@@ -13,15 +16,16 @@ use std::os::fd::{AsFd, BorrowedFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use drm::buffer::{Buffer as _, DrmFourcc, DrmModifier};
 use drm::control::{
     self, Device as _, FbCmd2Flags, Mode, ModeTypeFlags, PageFlipFlags, ResourceHandles, connector,
     crtc, framebuffer, plane, property,
 };
 use drm::{ClientCapability, Device as _, DriverCapability};
 use egui_glow::glow::{self, HasContext as _};
-use gbm::{AsRaw as _, BufferObject, BufferObjectFlags, Format, Modifier};
 
 use super::egl::{ConfigRequest, Egl, NativeDisplay, fourcc_name};
+use super::gbm::{self, GBM_BO_USE_RENDERING, GBM_BO_USE_SCANOUT, GbmApi, LockedBo};
 use super::{Platform, Started};
 use crate::options::{ModeCandidate, OutputConfig, select_mode};
 use crate::render::glow::GlowRenderer;
@@ -86,15 +90,19 @@ pub(crate) fn open(options: &Options) -> Result<Started<KmsPlatform>, Error> {
 
 pub(crate) struct KmsPlatform {
     // Teardown order is handled in `Drop`: buffers, framebuffers, EGL, GBM surface, GBM device.
+    // The fields are declared in that order too, and the card (whose fd GBM uses) comes last.
     egl: Option<Egl>,
     gl: Option<Arc<glow::Context>>,
-    surface: Option<gbm::Surface<Fb>>,
     /// Buffer on screen.
-    front: Option<BufferObject<Fb>>,
+    front: Option<LockedBo>,
     /// Buffer whose page flip is queued.
-    pending: Option<BufferObject<Fb>>,
-    framebuffers: Vec<Fb>,
-    gbm: gbm::Device<Card>,
+    pending: Option<LockedBo>,
+    /// DRM framebuffer per GBM buffer object. A GBM surface cycles through a fixed set of
+    /// buffers that live as long as the surface, so the pointer identifies the buffer.
+    framebuffers: Vec<(*mut c_void, Fb)>,
+    surface: Option<gbm::Surface>,
+    gbm: gbm::Device,
+    card: Card,
 
     output: Output,
     saved_crtc: crtc::Info,
@@ -112,6 +120,8 @@ pub(crate) struct KmsPlatform {
 
 impl KmsPlatform {
     pub(crate) fn new(options: &Options) -> Result<Self, Error> {
+        // First, so that `Auto` moves on before touching a card on boards without GBM.
+        let gbm_api = GbmApi::load()?;
         let (card, output) = open_output(&options.output)?;
 
         if let Err(e) = card.acquire_master_lock() {
@@ -159,18 +169,21 @@ impl KmsPlatform {
             physical_size_mm.map_or("unknown".to_owned(), |[w, h]| format!("{w}x{h} mm")),
         );
 
-        let gbm =
-            gbm::Device::new(card).map_err(|e| Error::Kms(format!("gbm_create_device: {e}")))?;
+        // SAFETY: `card` is stored after `gbm` in `Self`, so its fd is closed only after the GBM
+        // device and everything made from it are gone.
+        let gbm = unsafe { gbm::Device::new(gbm_api, card.as_fd()) }
+            .map_err(|e| Error::Kms(format!("gbm_create_device: {e}")))?;
         log::info!("GBM backend: {}", gbm.backend_name());
 
         let mut this = Self {
             egl: None,
             gl: None,
-            surface: None,
             front: None,
             pending: None,
             framebuffers: Vec::new(),
+            surface: None,
             gbm,
+            card,
             output,
             saved_crtc,
             modeset_done: false,
@@ -197,8 +210,8 @@ impl KmsPlatform {
     }
 
     fn init_egl(&mut self, options: &Options, [w, h]: [u32; 2]) -> Result<(), Error> {
-        let formats = [Format::Xrgb8888 as u32, Format::Argb8888 as u32];
-        let native = self.gbm.as_raw() as *mut c_void;
+        let formats = [DrmFourcc::Xrgb8888 as u32, DrmFourcc::Argb8888 as u32];
+        let native = self.gbm.as_raw();
         // SAFETY: the gbm device outlives `Egl` (dropped first in `Drop`).
         let egl = unsafe {
             Egl::new(
@@ -213,7 +226,7 @@ impl KmsPlatform {
                 },
             )?
         };
-        let format = Format::try_from(egl.native_visual_id).map_err(|_| {
+        let format = DrmFourcc::try_from(egl.native_visual_id).map_err(|_| {
             Error::Egl(format!(
                 "EGL config has unknown native visual {:#x}",
                 egl.native_visual_id
@@ -223,20 +236,11 @@ impl KmsPlatform {
 
         let surface = self
             .gbm
-            .create_surface::<Fb>(
-                w,
-                h,
-                format,
-                BufferObjectFlags::SCANOUT | BufferObjectFlags::RENDERING,
-            )
+            .create_surface(w, h, format, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING)
             .or_else(|e| {
                 log::debug!("gbm_surface_create failed ({e}), retrying with a linear modifier");
-                self.gbm.create_surface_with_modifiers::<Fb>(
-                    w,
-                    h,
-                    format,
-                    [Modifier::Linear].into_iter(),
-                )
+                self.gbm
+                    .create_surface_with_modifiers(w, h, format, &[DrmModifier::Linear])
             })
             .map_err(|e| {
                 Error::Kms(format!(
@@ -247,7 +251,7 @@ impl KmsPlatform {
         let surface = self.surface.insert(surface);
 
         // SAFETY: the gbm surface outlives the EGL surface (EGL is dropped first in `Drop`).
-        unsafe { egl.create_window_surface(surface.as_raw() as *mut c_void)? };
+        unsafe { egl.create_window_surface(surface.as_raw())? };
         log::debug!(
             "GBM surface {w}x{h} {}, GLES {}",
             fourcc_name(format as u32),
@@ -271,7 +275,7 @@ impl KmsPlatform {
         if pr.original == value {
             return rotation;
         }
-        match self.gbm.set_property(pr.plane, pr.property, value) {
+        match self.card.set_property(pr.plane, pr.property, value) {
             Ok(()) => {
                 pr.changed = true;
                 if rotation != Rotation::Deg0 {
@@ -311,7 +315,7 @@ impl KmsPlatform {
 
     fn set_crtc(&self, fb: Fb) -> Result<(), Error> {
         let o = &self.output;
-        self.gbm
+        self.card
             .set_crtc(o.crtc, Some(fb), (0, 0), &[o.connector], Some(o.mode))
             .map_err(|e| {
                 if matches!(e.kind(), io::ErrorKind::PermissionDenied) {
@@ -325,58 +329,60 @@ impl KmsPlatform {
             })
     }
 
-    fn swap_and_lock(&mut self) -> Result<(BufferObject<Fb>, Fb), Error> {
+    fn swap_and_lock(&mut self) -> Result<(LockedBo, Fb), Error> {
         self.egl
             .as_ref()
             .expect("EGL is initialized")
             .swap_buffers()?;
         let surface = self.surface.as_ref().expect("GBM surface is initialized");
         // SAFETY: called exactly once after eglSwapBuffers.
-        let mut bo = unsafe { surface.lock_front_buffer() }
-            .map_err(|_| Error::Kms("gbm_surface_lock_front_buffer failed".into()))?;
-        let fb = self.framebuffer_for(&mut bo)?;
+        let bo = unsafe { surface.lock_front_buffer() }
+            .ok_or_else(|| Error::Kms("gbm_surface_lock_front_buffer failed".into()))?;
+        let fb = self.framebuffer_for(&bo)?;
         Ok((bo, fb))
     }
 
-    /// DRM framebuffer for a GBM buffer, created on first use and cached in the buffer's user
-    /// data (GBM surfaces cycle through a fixed set of buffers).
-    fn framebuffer_for(&mut self, bo: &mut BufferObject<Fb>) -> Result<Fb, Error> {
-        if let Some(fb) = bo.userdata() {
-            return Ok(*fb);
+    /// DRM framebuffer for a GBM buffer, created on first use and cached (GBM surfaces cycle
+    /// through a fixed set of buffers).
+    fn framebuffer_for(&mut self, bo: &LockedBo) -> Result<Fb, Error> {
+        if let Some(&(_, fb)) = self
+            .framebuffers
+            .iter()
+            .find(|(raw, _)| *raw == bo.as_raw())
+        {
+            return Ok(fb);
         }
-        let modifier = bo.modifier();
-        let with_modifier = if self.addfb2_modifiers && modifier != Modifier::Invalid {
-            self.gbm
-                .add_planar_framebuffer(&*bo, FbCmd2Flags::MODIFIERS)
+        let with_modifier = match bo.planar() {
+            Some(planar) if self.addfb2_modifiers => self
+                .card
+                .add_planar_framebuffer(&planar, FbCmd2Flags::MODIFIERS)
                 .inspect_err(|e| log::debug!("drmModeAddFB2WithModifiers failed: {e}"))
-                .ok()
-        } else {
-            None
+                .ok(),
+            _ => None,
         };
         let fb = match with_modifier {
             Some(fb) => fb,
             None => {
                 let (depth, bpp) = match bo.format() {
-                    Format::Argb8888 => (32, 32),
+                    DrmFourcc::Argb8888 => (32, 32),
                     _ => (24, 32),
                 };
-                self.gbm
-                    .add_framebuffer(&*bo, depth, bpp)
+                self.card
+                    .add_framebuffer(bo, depth, bpp)
                     .map_err(|e| Error::Kms(format!("drmModeAddFB: {e}")))?
             }
         };
-        bo.set_userdata(fb);
-        self.framebuffers.push(fb);
+        self.framebuffers.push((bo.as_raw(), fb));
         Ok(fb)
     }
 
     fn queue_flip(&mut self, fb: Fb) -> io::Result<()> {
         let crtc = self.output.crtc;
-        match self.gbm.page_flip(crtc, fb, self.flip_flags, None) {
+        match self.card.page_flip(crtc, fb, self.flip_flags, None) {
             Err(e) if self.flip_flags.contains(PageFlipFlags::ASYNC) => {
                 log::info!("Async page flip failed ({e}), falling back to vsync");
                 self.flip_flags.remove(PageFlipFlags::ASYNC);
-                self.gbm.page_flip(crtc, fb, self.flip_flags, None)
+                self.card.page_flip(crtc, fb, self.flip_flags, None)
             }
             result => result,
         }
@@ -386,7 +392,7 @@ impl KmsPlatform {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         while self.pending.is_some() && std::time::Instant::now() < deadline {
             let mut fds = [rustix::event::PollFd::new(
-                &self.gbm,
+                &self.card,
                 rustix::event::PollFlags::IN,
             )];
             let timeout = rustix::time::Timespec {
@@ -413,7 +419,7 @@ impl KmsPlatform {
         let dpms = self
             .dpms
             .ok_or_else(|| Error::Kms(format!("{} has no DPMS property", self.output_name())))?;
-        self.gbm
+        self.card
             .set_property(self.output.connector, dpms, value)
             .map_err(|e| Error::Kms(format!("setting DPMS: {e}")))
     }
@@ -422,14 +428,14 @@ impl KmsPlatform {
         let o = &self.output;
         let saved = &self.saved_crtc;
         let result = match (saved.framebuffer(), saved.mode()) {
-            (Some(fb), Some(mode)) => self.gbm.set_crtc(
+            (Some(fb), Some(mode)) => self.card.set_crtc(
                 o.crtc,
                 Some(fb),
                 saved.position(),
                 &[o.connector],
                 Some(mode),
             ),
-            _ => self.gbm.set_crtc(o.crtc, None, (0, 0), &[], None),
+            _ => self.card.set_crtc(o.crtc, None, (0, 0), &[], None),
         };
         if let Err(e) = result {
             log::warn!("Restoring the previous display configuration failed: {e}");
@@ -478,12 +484,12 @@ impl Platform for KmsPlatform {
     }
 
     fn event_fd(&self) -> Option<BorrowedFd<'_>> {
-        Some(self.gbm.as_fd())
+        Some(self.card.as_fd())
     }
 
     fn dispatch_events(&mut self) -> Result<(), Error> {
         let events = self
-            .gbm
+            .card
             .receive_events()
             .map_err(|e| Error::Kms(format!("reading DRM events: {e}")))?;
         for event in events {
@@ -525,20 +531,20 @@ impl Drop for KmsPlatform {
         }
         if let Some(pr) = &self.plane_rotation
             && pr.changed
-            && let Err(e) = self.gbm.set_property(pr.plane, pr.property, pr.original)
+            && let Err(e) = self.card.set_property(pr.plane, pr.property, pr.original)
         {
             log::debug!("Restoring plane rotation failed: {e}");
         }
         self.pending = None;
         self.front = None;
-        for fb in self.framebuffers.drain(..) {
-            let _ = self.gbm.destroy_framebuffer(fb);
+        for (_, fb) in self.framebuffers.drain(..) {
+            let _ = self.card.destroy_framebuffer(fb);
         }
         self.gl = None;
         // EGL surface before the GBM surface it wraps, GBM surface before the device.
         self.egl = None;
         self.surface = None;
-        let _ = self.gbm.release_master_lock();
+        let _ = self.card.release_master_lock();
     }
 }
 

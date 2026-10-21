@@ -37,6 +37,9 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
   deadline after each frame (part of the poll timeout) and saves before `on_exit`.
 - `src/platform/`: `Platform` trait (with an associated `Renderer` type) and `Started<P>`.
   - `kms.rs`: DRM/GBM, page flips, CRTC restore, `kms::open` also creates the `GlowRenderer`.
+  - `gbm.rs`: the few libgbm functions `kms` needs, dlopen'ed (`libgbm.so.1`). RAII `Device`,
+    `Surface`, `LockedBo` (implements drm's `Buffer`/`PlanarBuffer`); a surface keeps its device
+    alive, a locked buffer its surface. Modifier/plane functions are optional (old libgbm).
   - `mod.rs` also has `glow_started`, which wraps any GL platform with a `GlowRenderer` (software
     rotation = requested minus hardware).
   - `egl.rs`: EGL setup (`NativeDisplay::Platform` for GBM, `Legacy` for plain `eglGetDisplay`).
@@ -93,14 +96,13 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 - `README.md`: user-facing overview and the options table. Keep it in sync when adding options.
 
 ## Rules
-- Vendor graphics libs are **dlopen'ed** (`khronos-egl` dynamic, `libloading` for libGLESv2). The
-  only build-time native dependency is `libgbm` (via `gbm-sys`, `kms` feature only). Keep it that
-  way: new link-time C dependencies have to be added to the cross image as well.
-- A binary built with `kms` does not start on boards without `libgbm.so.1`. Build those boards with
-  `--no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts`.
+- Vendor graphics libs are **dlopen'ed** (`khronos-egl` dynamic, `libloading` for libGLESv2,
+  libgbm and Vivante's fb* functions). Nothing native is linked at build time, so one binary per
+  architecture runs on every board (without libgbm, `kms` fails and `Auto` falls through). Keep it
+  that way: CI fails if an example links libgbm, and a link-time C dependency would also have to be
+  added to the cross image.
 - Binaries must keep running on **glibc 2.31** (JetPack 5, Pi OS Bullseye, older Yocto). Don't
   switch the cross image to a newer base.
-- `drm` must stay on the version `gbm` uses (currently 0.14).
 - Linux platform code is gated by `target_os = "linux"` + its feature. The crate must still
   `cargo check`/`cargo test` on the Windows host; the software renderer is fully testable there.
 - Keep math, parsing and pixel conversion in pure functions with unit tests, so they can be tested
@@ -108,8 +110,8 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 - Rotation convention: clockwise. `Rotation::panel_to_logical[_px]` maps panel pixels to egui pixels
   and is shared by the GL blit, the framebuffer copy and touch input.
 - Input decoders must stay free of `evdev` crate types; only `devices.rs` may use the crate.
-- Teardown order (kms) matters: GBM buffers → DRM framebuffers → EGL → GBM surface → GBM device.
-  Restore the CRTC before destroying our framebuffers.
+- Teardown order (kms) matters: GBM buffers → DRM framebuffers → EGL → GBM surface → GBM device →
+  card fd. Restore the CRTC before destroying our framebuffers.
 
 ## Commands
 Host (Windows):
@@ -126,14 +128,14 @@ cargo fmt --check
 ```
 
 Cross builds use cross-rs with Podman (`podman machine start` if it is stopped). The image comes from
-`docker/Dockerfile.cross-focal` (Ubuntu 20.04 + `libgbm-dev` for the target arch), see `Cross.toml`:
+`docker/Dockerfile.cross-focal` (Ubuntu 20.04 + the GCC cross toolchain), see `Cross.toml`:
 ```sh
 cross build --release --target aarch64-unknown-linux-gnu --examples
 cross build --release --target armv7-unknown-linux-gnueabihf --examples
-# i.MX6 without KMS/GBM: Vivante fbdev EGL or CPU framebuffer, no libgbm needed on the board
+# optional, a smaller binary without kms (i.MX6 Vivante fbdev BSPs; the default build runs there too)
 cross build --release --target armv7-unknown-linux-gnueabihf --examples --no-default-features --features viv-fb,linuxfb,input-evdev,osk,default_fonts
 cross build --release --target x86_64-unknown-linux-gnu --examples
-cross test --target x86_64-unknown-linux-gnu   # run the tests on Linux (the image has libgbm)
+cross test --target x86_64-unknown-linux-gnu   # run the tests on Linux
 ```
 If cross build scripts fail with `GLIBC_x.y not found` after an image change, delete
 `target/release/{build,deps,.fingerprint}` and `target/<triple>/release` (stale host artifacts).
@@ -141,19 +143,18 @@ If cross build scripts fail with `GLIBC_x.y not found` after an image change, de
 ## Workflow
 - `main` is protected (ruleset "Protect main"): no direct pushes. Work on a branch, open a PR whose
   **title** is a Conventional Commit (it becomes the squash commit and the changelog entry), and
-  wait for all required checks: `check`, `boards / aarch64|armv7|armv7-linuxfb|x86_64` and
+  wait for all required checks: `check`, `boards / aarch64|armv7|x86_64` and
   `pr-title`. The owner merges.
 - Changes that affect what users see (new options, features, behavior) need a README update.
 
 ## CI and releases
 Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 - `.github/workflows/ci.yml`: fmt, clippy for the host and both ARM targets plus feature combos,
-  tests (the runner installs `libgbm-dev`), docs, the board builds and a Conventional Commits check
+  tests, docs, the board builds and a Conventional Commits check
   of PR titles (PRs are squash-merged). There is no Windows/macOS job (slow and flaky): that the
   crate still builds on the Windows host is checked locally with `cargo test`.
-- `.github/workflows/boards.yml` (reusable): `cross build --examples` for aarch64, armv7,
-  armv7-linuxfb (`viv-fb` + `linuxfb`, must not link libgbm) and x86_64; fails if an example is
-  missing or needs glibc > 2.31. Packs all examples into `eboard-examples-<board>.tar.gz` and
+- `.github/workflows/boards.yml` (reusable): `cross build --examples` for aarch64, armv7 and
+  x86_64; fails if an example is missing, links libgbm or needs glibc > 2.31. Packs all examples into `eboard-examples-<board>.tar.gz` and
   uploads it as an artifact in CI, or attaches it to the GitHub release. New examples are picked
   up automatically (`cargo metadata`).
 - `.github/workflows/release-plz.yml` + `release-plz.toml`: release PR on every push to `main`;
@@ -166,6 +167,9 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 ## Status
 - Phase 1 (KMS + EGL + glow, rotation, event-driven repaint, signals) is done and verified on a
   Raspberry Pi 5 + Touch Display 2, including `EBOARD_ROTATION=90`.
+- libgbm is dlopen'ed (one binary per architecture): verified on the Pi 5 (`Auto` picks `kms`,
+  `AddFB2WithModifiers`, 60 fps page flips; a build with a bogus library name falls through to
+  `linuxfb`). Still to check: the default armv7 archive on the i.MX6QP (should pick `viv-fb`).
 - `viv-fb` (Vivante fbdev EGL) is verified on an i.MX6QP (GC2000+, GLES 3.1, driver 6.4.11,
   `/dev/fb0` 1024x768x32, `FB_MULTI_BUFFER=2`, `Auto` picks it). That fb runs at 24 Hz (65 MHz
   pixel clock, wide horizontal blanking) into an FPGA video mixer that chroma-keys the UI over a
@@ -192,4 +196,4 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 - Software renderer speedups not done yet: multithreaded bands, skipping unchanged regions
   before rasterizing, fast path for axis-aligned quads (text).
 - Not done yet: clipboard/IME/cursor from `PlatformOutput`, hardware rotation other than 180°,
-  page flipping on fbdev (`FBIOPAN_DISPLAY`), dlopen'ing libgbm (one binary for all boards).
+  page flipping on fbdev (`FBIOPAN_DISPLAY`).

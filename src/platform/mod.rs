@@ -6,6 +6,8 @@ pub(crate) mod egl;
 #[cfg(all(target_os = "linux", any(feature = "linuxfb", feature = "viv-fb")))]
 mod fbdev;
 #[cfg(all(target_os = "linux", feature = "kms"))]
+mod gbm;
+#[cfg(all(target_os = "linux", feature = "kms"))]
 pub(crate) mod kms;
 #[cfg(all(target_os = "linux", feature = "linuxfb"))]
 pub(crate) mod linuxfb;

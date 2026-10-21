@@ -94,7 +94,8 @@ impl TouchDecoder {
             (EV_ABS, code) if self.multitouch => self.multitouch_axis(code, value),
             (EV_ABS, ABS_X) => self.set_position(0, value),
             (EV_ABS, ABS_Y) => self.set_position(1, value),
-            (EV_KEY, BTN_TOUCH) => {
+            // Multi-touch devices send it too, but there the tracking ids say who touches.
+            (EV_KEY, BTN_TOUCH) if !self.multitouch => {
                 self.contacts[0].current = (value != 0).then_some(0);
             }
             _ => {}
@@ -364,6 +365,62 @@ mod tests {
         assert_eq!(
             touches(&events),
             vec![(1, TouchPhase::Start, pos2(0.5, 0.5))]
+        );
+    }
+
+    #[test]
+    fn multitouch_ignores_btn_touch() {
+        let mut s = shared(Rotation::Deg0);
+        let mut d = TouchDecoder::new(1, RANGE_X, RANGE_Y, Some(10), TouchTransform::default());
+        // Slot 0 was used before, then the first finger lands in slot 1.
+        feed(
+            &mut d,
+            &mut s,
+            &[
+                (EV_ABS, ABS_MT_TRACKING_ID, 1),
+                (EV_ABS, ABS_MT_POSITION_X, 10),
+                (EV_ABS, ABS_MT_POSITION_Y, 10),
+                (EV_KEY, BTN_TOUCH, 1),
+                SYN,
+            ],
+        );
+        feed(
+            &mut d,
+            &mut s,
+            &[
+                (EV_ABS, ABS_MT_TRACKING_ID, -1),
+                (EV_KEY, BTN_TOUCH, 0),
+                SYN,
+            ],
+        );
+        let down = feed(
+            &mut d,
+            &mut s,
+            &[
+                (EV_ABS, ABS_MT_SLOT, 1),
+                (EV_ABS, ABS_MT_TRACKING_ID, 2),
+                (EV_ABS, ABS_MT_POSITION_X, 500),
+                (EV_ABS, ABS_MT_POSITION_Y, 500),
+                (EV_KEY, BTN_TOUCH, 1),
+                SYN,
+            ],
+        );
+        // One touch with the kernel's tracking id, no phantom in slot 0.
+        let t = touches(&down);
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!((t[0].0, t[0].1), (2, TouchPhase::Start));
+        let up = feed(
+            &mut d,
+            &mut s,
+            &[
+                (EV_ABS, ABS_MT_TRACKING_ID, -1),
+                (EV_KEY, BTN_TOUCH, 0),
+                SYN,
+            ],
+        );
+        assert_eq!(
+            touches(&up).iter().map(|t| (t.0, t.1)).collect::<Vec<_>>(),
+            [(2, TouchPhase::End)]
         );
     }
 

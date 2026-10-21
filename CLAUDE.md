@@ -23,7 +23,8 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 - `src/runner.rs`: run loop, generic over `Platform`. It sleeps in `poll()` on the platform fd (DRM
   page flips) plus an eventfd that egui's repaint callback and the signal handler write to.
   Platforms without vblank events are paced by `Platform::frame_interval`. No busy loop: idle CPU
-  must stay ~0. On exit, platforms with `Platform::CLEAR_ON_EXIT` (fbdev: nothing else redraws the
+  must stay ~0. Before each frame it also polls without waiting, so back-to-back frames don't
+  starve input. On exit, platforms with `Platform::CLEAR_ON_EXIT` (fbdev: nothing else redraws the
   framebuffer unless fbcon is bound to it) get one empty frame in `App::clear_color`.
 - `src/signals.rs`: SIGINT/SIGTERM → clean exit (the second signal `_exit`s).
 - `src/idle.rs`: `IdleTimer` (blank deadline, part of the poll timeout) and `WakeFilter`, which
@@ -72,8 +73,9 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
     clipboard) and `Input`, which the runner polls; draws the software mouse cursor.
   - `osk.rs` (feature `osk`): on-screen keyboard. Not egui widgets (they'd steal the
     `TextEdit`'s focus): `Osk::filter` consumes pointer/touch gestures that start on it and emits
-    `Event::Text`/`Event::Key` on release over the same key. Shown while `PlatformOutput::ime` is
-    set (`Auto`: only without a typing keyboard, `devices::has_keyboard`, which ignores CEC
+    `Event::Text`/`Event::Key` on release over the same key. Backspace acts on press and repeats
+    while held (`paint` requests the repaint for the next repeat). Shown while
+    `PlatformOutput::ime` is set (`Auto`: only without a typing keyboard, `devices::has_keyboard`, which ignores CEC
     keypads). Reserves its height as the bottom `safe_area_insets` (always sent, they are sticky).
     The runner runs `App::ui` in a child `Ui` limited to `ctx.content_rect()` (the root `Ui` is
     the whole viewport), always, so widget ids don't change. Painted on `Order::Tooltip` with
@@ -188,8 +190,7 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
   sysfs. linuxfb copies the whole canvas after unblanking (fbcon may have drawn over it).
 - On-screen keyboard is done and verified on the Pi 5 (linuxfb captures; kms sanity run): shows
   on focus, types with shift, Enter hides it, `Auto` hides it while `uinput_kbdmouse.py` is
-  attached and shows it again on unplug, works at `EBOARD_ROTATION=90`. Not done: backspace
-  auto-repeat (needs a timer), other layouts.
+  attached and shows it again on unplug, works at `EBOARD_ROTATION=90`. Not done: other layouts.
 - Input not done yet: keyboard layouts other than US (xkbcommon), touchpads, tslib calibration,
   hardware cursor plane, key repeat settings.
 - Later: GLES2 32-bit index workaround (i.MX6DL/S GC880 without `GL_OES_element_index_uint`), phase 4 extras (wgpu + `VK_KHR_display`, EGLDevice, multi-output).

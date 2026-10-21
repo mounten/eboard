@@ -70,7 +70,7 @@ automatically.
 - **On-screen keyboard** (`osk` feature, default): on touch-only devices a keyboard slides in at
   the bottom while a text field has the focus, and panels lay out above it (it is reported as the
   bottom safe-area inset, `ctx.content_rect()`). US letters with shift (double tap locks caps), a
-  `?123` symbols page, backspace, enter and a hide key. Enter in a single-line field and the hide
+  `?123` symbols page, backspace (repeats while held), enter and a hide key. Enter in a single-line field and the hide
   key drop the focus, which hides the keyboard. By default (`input.osk = auto`) it only appears
   while no hardware keyboard is attached; `always` shows it anyway, `off` never.
 

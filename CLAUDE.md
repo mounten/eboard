@@ -164,9 +164,12 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
 ## Status
 - Phase 1 (KMS + EGL + glow, rotation, event-driven repaint, signals) is done and verified on a
   Raspberry Pi 5 + Touch Display 2, including `EBOARD_ROTATION=90`.
-- `viv-fb` (Vivante fbdev EGL) is written from the i.MX6 SDK's `EGL/eglvivante.h` but not yet
-  run on the i.MX6. On the Pi it must fail with "not the Vivante fbdev EGL" and let `Auto`
-  fall through.
+- `viv-fb` (Vivante fbdev EGL) is verified on an i.MX6QP (GC2000+, GLES 3.1, driver 6.4.11,
+  `/dev/fb0` 1024x768x32, `FB_MULTI_BUFFER=2`, `Auto` picks it). That fb runs at 24 Hz (65 MHz
+  pixel clock, wide horizontal blanking) into an FPGA video mixer that chroma-keys the UI over a
+  24 Hz camera feed (see `examples/hud.rs`); eboard paces to it. Touch comes over CAN (apps feed
+  it through `App::raw_input_hook`), so there is no evdev input on that board. On the Pi
+  `viv-fb` must fail with "not the Vivante fbdev EGL" and let `Auto` fall through.
 - `linuxfb` + software renderer is done and verified on the Pi 5 through DRM's fbdev emulation (0° and
   90°, 60 fps animated at ~2.6 ms CPU per frame, ~0% idle). Not yet tried on the i.MX6.
 - Input (evdev touch/mouse/keyboard, hotplug, keyboard grab) is done and verified on the Pi 5 with

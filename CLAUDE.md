@@ -194,7 +194,8 @@ Modeled on the owner's egui-kit crate (see `CONTRIBUTING.md`):
   90°, 60 fps animated at ~2.6 ms CPU per frame, ~0% idle). Not yet tried on the i.MX6. Page
   flipping is verified on the Pi with `drm_kms_helper.drm_fbdev_overalloc=200` on the kernel
   command line (two pages; the Pi normally has one, so it falls back to drawing into the visible
-  page). Partial redraws (only changed shapes) are verified on the Pi: `hello` while a finger
+  page). Partial redraws (only changed shapes) are verified on the Pi, with and without page
+  flipping: `hello` while a finger
   moves (only the header's numbers change) takes 0.4 ms CPU per frame instead of 17 ms;
   `stress_test` (everything changes) is about 5% slower than a plain full redraw.
 - Input (evdev touch/mouse/keyboard, hotplug, keyboard grab) is done and verified on the Pi 5 with

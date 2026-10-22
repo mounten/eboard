@@ -7,13 +7,14 @@
 **eframe for embedded boards.** Run [egui](https://github.com/emilk/egui) apps full-screen on
 embedded Linux **without a compositor, X11/Wayland or winit**, similar to Qt's `eglfs` and `linuxfb`
 platform plugins. The API mirrors [eframe](https://github.com/emilk/egui/tree/main/crates/eframe),
-so moving an app between desktop and board is mostly a change of the entry point.
+so moving an app between desktop and board is mostly a change of the entry point. The only name
+that differs is `Board` (eframe's `Frame`).
 
 ```rust
 struct Hello;
 
 impl eboard::App for Hello {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eboard::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _board: &mut eboard::Board) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Hello from eboard");
         });
@@ -87,10 +88,10 @@ the panel's backlight off with it. Nothing is rendered while it is dark, so the 
 
 The next touch, click or key press wakes the display, and that whole gesture is swallowed: a tap
 on a dark screen can't press a button nobody could see. Apps can change the timeout at runtime,
-or turn blanking off while a video or an alarm is shown, with `Frame::set_blank_after`. Blanking
+or turn blanking off while a video or an alarm is shown, with `Board::set_blank_after`. Blanking
 needs input (`input-evdev`), otherwise nothing could wake the display.
 
-`Frame::brightness()` and `Frame::set_brightness(0.0..=1.0)` control the backlight through
+`Board::brightness()` and `Board::set_brightness(0.0..=1.0)` control the backlight through
 `/sys/class/backlight`. The device is picked automatically (`firmware`, then `platform`, then
 `raw`, like systemd) or set with `output.backlight` / `EBOARD_BACKLIGHT`. Writing it needs the
 `video` group on most distributions, or a udev rule such as:
@@ -131,7 +132,7 @@ the UI was repainted. Boards lose power without warning and flash wears out, so 
 written when its content changed, and atomically (temporary file, fsync, rename, fsync of the
 directory): after a power cut there is either the old or the new state. A file that doesn't parse
 is moved to `app.ron.bad` and the app starts with empty state. Settings that must survive an
-immediate power cut can be saved and flushed right away through `Frame::storage_mut`.
+immediate power cut can be saved and flushed right away through `Board::storage_mut`.
 
 The file is `persistence_path` if set, else `$STATE_DIRECTORY/app.ron` (systemd
 `StateDirectory=`, the usual choice for a kiosk service), else `$XDG_DATA_HOME/<app>/app.ron`, else
@@ -177,7 +178,7 @@ variable, so a deployed binary can be reconfigured without rebuilding.
 | `output.rotation` | `EBOARD_ROTATION` | `90` | Rotate the UI clockwise: `0`, `90`, `180`, `270` |
 | `output.physical_size_mm` | `EBOARD_PHYSICAL_SIZE` | `155x88` | Panel size in mm, used for the scale factor |
 | `output.pixels_per_point` | `EBOARD_PPP` | `1.5` | Fixed scale factor (default: from the panel's pixel density, 160 dpi = 1.0) |
-| `output.backlight` | `EBOARD_BACKLIGHT` | `panel_backlight@1` | Device in `/sys/class/backlight` for `Frame::set_brightness` (default: picked automatically) |
+| `output.backlight` | `EBOARD_BACKLIGHT` | `panel_backlight@1` | Device in `/sys/class/backlight` for `Board::set_brightness` (default: picked automatically) |
 | `vsync` | `EBOARD_VSYNC` | `0` | Wait for vblank (default on) |
 | `multisampling` | – | `4` | MSAA samples (GL backends `kms`/`viv-fb`, default 0) |
 | `dithering` | – | `false` | Dithering in the GL shader (`kms`/`viv-fb`, default on) |

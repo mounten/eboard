@@ -27,9 +27,9 @@ struct Hello {
 }
 
 impl eboard::App for Hello {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eboard::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, board: &mut eboard::Board) {
         egui::CentralPanel::default().show(ui, |ui| {
-            self.header.show(ui, frame);
+            self.header.show(ui, board);
 
             ui.heading("My egui Application");
             ui.horizontal(|ui| {

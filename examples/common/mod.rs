@@ -31,14 +31,14 @@ impl Header {
     }
 
     /// Call once per frame, at the top of the UI.
-    pub fn show(&mut self, ui: &mut egui::Ui, frame: &mut eboard::Frame) {
+    pub fn show(&mut self, ui: &mut egui::Ui, board: &mut eboard::Board) {
         self.tick();
-        let screen = frame.screen().clone();
+        let screen = board.screen().clone();
 
         ui.horizontal(|ui| {
             ui.heading(self.title);
             if ui.button("Quit").clicked() {
-                frame.close();
+                board.close();
             }
         });
         ui.label(format!(
@@ -73,7 +73,7 @@ impl Header {
                 1000.0 / avg.max(0.001)
             );
         }
-        if let Some(cpu) = frame.cpu_usage() {
+        if let Some(cpu) = board.cpu_usage() {
             stats += &format!(", CPU per frame {:.2} ms", cpu * 1000.0);
         }
         ui.label(stats);

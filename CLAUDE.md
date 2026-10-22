@@ -1,9 +1,9 @@
 # eboard
 
 Runs egui apps full-screen on embedded Linux **without a compositor, winit or eframe**, the way Qt's
-`eglfs` and `linuxfb` do. The public API mirrors eframe 0.37 (`App`, `Frame`, `CreationContext`,
-`run`). Backends are cargo features, selected at runtime (`EBOARD_BACKEND`, `Backend::Auto`
-tries them in this order):
+`eglfs` and `linuxfb` do. The public API mirrors eframe 0.37 (`App`, `Board` (eframe's `Frame`),
+`CreationContext`, `run`). Backends are cargo features, selected at runtime (`EBOARD_BACKEND`,
+`Backend::Auto` tries them in this order):
 - `kms`: DRM/KMS + GBM + EGL, painted with OpenGL ES through `egui_glow`.
 - `viv-fb`: Vivante GPU on `/dev/fbN` through NXP's fbdev EGL (`fbGetDisplayByIndex`,
   `fbCreateWindow`), painted with `egui_glow`, like Qt's `eglfs_viv`. For i.MX6 BSPs that ship the
@@ -17,7 +17,7 @@ Targets: Raspberry Pi 5 (primary dev board, Touch Display 2), NVIDIA Jetson (NVG
 ## Layout
 - `src/lib.rs`: `run()`, backend selection (`backends::run`), and `run_on`, which wires any
   `Platform` + its renderer to the runner.
-- `src/app.rs`: `App` trait, `Frame`, `CreationContext`, `ScreenInfo`.
+- `src/app.rs`: `App` trait, `Board`, `CreationContext`, `ScreenInfo`.
 - `src/options.rs`: `Options`, `EBOARD_*` env overrides, mode selection (pure, tested).
 - `src/geometry.rs`: rotation math (continuous and pixel-exact), pixels-per-point (pure, tested).
 - `src/runner.rs`: run loop, generic over `Platform`. It sleeps in `poll()` on the platform fd (DRM

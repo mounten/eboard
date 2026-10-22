@@ -51,7 +51,7 @@ impl eboard::App for Hud {
         self.key.to_normalized_gamma_f32()
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eboard::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, board: &mut eboard::Board) {
         let t = self.started.elapsed().as_secs_f32();
         let ctx = ui.ctx().clone();
 
@@ -87,7 +87,7 @@ impl eboard::App for Hud {
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 16.0))
             .show(&ctx, |ui| {
                 plate(ui, |ui| {
-                    self.header.show(ui, frame);
+                    self.header.show(ui, board);
                     ui.label(format!("T+{t:.0} s"));
                     if self.recording {
                         ui.colored_label(egui::Color32::from_rgb(255, 60, 60), "● REC");

@@ -217,7 +217,7 @@ pub struct OutputConfig {
     /// (see [`crate::pixels_per_point_from_size`]). Env: `EBOARD_PPP`.
     pub pixels_per_point: Option<f32>,
 
-    /// Backlight device in `/sys/class/backlight` for [`crate::Frame::set_brightness`], e.g.
+    /// Backlight device in `/sys/class/backlight` for [`crate::Board::set_brightness`], e.g.
     /// `panel_backlight@1`. Default: picked automatically (`firmware` before `platform` before
     /// `raw`, like systemd). Env: `EBOARD_BACKLIGHT`.
     pub backlight: Option<String>,
@@ -262,7 +262,7 @@ pub struct Options {
     /// Power the display down after this long without input (burn-in, power saving). The touch,
     /// click or key press that wakes it is swallowed, so it can't press anything. Needs input
     /// (feature `input-evdev`), otherwise nothing could wake the display. Apps can change it at
-    /// runtime with [`crate::Frame::set_blank_after`]. Default: off. Env: `EBOARD_BLANK_AFTER`
+    /// runtime with [`crate::Board::set_blank_after`]. Default: off. Env: `EBOARD_BLANK_AFTER`
     /// (seconds, `0` = off).
     pub blank_after: Option<Duration>,
 

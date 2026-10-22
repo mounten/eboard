@@ -24,12 +24,12 @@ struct StressTest {
 }
 
 impl eboard::App for StressTest {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eboard::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, board: &mut eboard::Board) {
         // Repaint as fast as the display allows: a benchmark, not an idle demo.
         ui.ctx().request_repaint();
 
         egui::CentralPanel::default().show(ui, |ui| {
-            self.header.show(ui, frame);
+            self.header.show(ui, board);
 
             ui.horizontal(|ui| {
                 ui.add(egui::Slider::new(&mut self.grid_size, 1..=80).text("grid"));

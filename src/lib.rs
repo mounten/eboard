@@ -13,7 +13,7 @@
 //! struct Hello;
 //!
 //! impl eboard::App for Hello {
-//!     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eboard::Frame) {
+//!     fn ui(&mut self, ui: &mut egui::Ui, _board: &mut eboard::Board) {
 //!         ui.heading("Hello from KMS!");
 //!     }
 //! }
@@ -29,7 +29,7 @@
 //! ```no_run
 //! # struct MyApp;
 //! # impl eboard::App for MyApp {
-//! #     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eboard::Frame) {}
+//! #     fn ui(&mut self, _ui: &mut egui::Ui, _board: &mut eboard::Board) {}
 //! # }
 //! use std::sync::Arc;
 //!
@@ -111,7 +111,7 @@ pub use egui_glow;
 #[cfg(feature = "glow")]
 pub use egui_glow::glow;
 
-pub use app::{App, CreationContext, Frame, ScreenInfo};
+pub use app::{App, Board, CreationContext, ScreenInfo};
 pub use error::Error;
 pub use geometry::{Rotation, TouchTransform, pixels_per_point_from_size};
 pub use options::{Backend, InputGrab, InputOptions, ModeRequest, Options, OskMode, OutputConfig};
@@ -255,7 +255,7 @@ mod backends {
             }
         };
 
-        let frame = Frame {
+        let board = Board {
             screen,
             close_requested: false,
             cpu_usage: None,
@@ -288,7 +288,7 @@ mod backends {
             platform: &mut platform,
             renderer: &mut renderer,
             egui_ctx,
-            frame,
+            board,
             size_px,
             native_pixels_per_point,
             handle_signals: options.handle_signals,

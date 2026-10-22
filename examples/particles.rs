@@ -67,7 +67,7 @@ impl Particles {
 }
 
 impl eboard::App for Particles {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eboard::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, board: &mut eboard::Board) {
         // Repaint as fast as the display allows: a benchmark, not an idle demo.
         ui.ctx().request_repaint();
 
@@ -78,7 +78,7 @@ impl eboard::App for Particles {
         self.last_update = now;
 
         egui::CentralPanel::default().show(ui, |ui| {
-            self.header.show(ui, frame);
+            self.header.show(ui, board);
 
             ui.horizontal(|ui| {
                 if ui.button("-100").clicked() {

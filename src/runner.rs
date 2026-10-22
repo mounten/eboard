@@ -11,7 +11,7 @@ use rustix::event::{EventfdFlags, PollFd, PollFlags};
 use crate::idle::IdleTimer;
 use crate::platform::Platform;
 use crate::render::Renderer;
-use crate::{App, Error, Frame, signals};
+use crate::{App, Board, Error, signals};
 
 /// Wakes the run loop from any thread (egui repaint requests) and carries the earliest requested
 /// repaint time.
@@ -58,7 +58,7 @@ pub(crate) struct Runner<'a, P: Platform> {
     pub platform: &'a mut P,
     pub renderer: &'a mut P::Renderer,
     pub egui_ctx: egui::Context,
-    pub frame: Frame,
+    pub board: Board,
     /// Size egui lays out for, in pixels (after rotation).
     pub size_px: [u32; 2],
     pub native_pixels_per_point: f32,
@@ -170,11 +170,11 @@ impl<P: Platform> Runner<'_, P> {
                     .and_then(|i| now.checked_add(i));
                 let (repaint_delay, close) = self.frame(app, start)?;
                 next_repaint = Instant::now().checked_add(repaint_delay);
-                if let Some(blank_after) = self.frame.blank_after_request.take() {
+                if let Some(blank_after) = self.board.blank_after_request.take() {
                     self.set_blank_after(blank_after);
                 }
                 #[cfg(feature = "persistence")]
-                if save_deadline.is_none() && self.frame.storage.is_some() {
+                if save_deadline.is_none() && self.board.storage.is_some() {
                     save_deadline = Instant::now().checked_add(app.auto_save_interval());
                 }
                 if close {
@@ -224,7 +224,7 @@ impl<P: Platform> Runner<'_, P> {
     /// Lets the app save its state, adds egui's memory and writes the file if anything changed.
     #[cfg(feature = "persistence")]
     fn save(&mut self, app: &mut dyn App) {
-        let Some(storage) = self.frame.storage.as_deref_mut() else {
+        let Some(storage) = self.board.storage.as_deref_mut() else {
             return;
         };
         app.save(storage);
@@ -334,17 +334,17 @@ impl<P: Platform> Runner<'_, P> {
         let mut raw_input = self.raw_input(start);
         app.raw_input_hook(&self.egui_ctx, &mut raw_input);
 
-        let frame = &mut self.frame;
+        let board = &mut self.board;
         #[cfg(feature = "input-evdev")]
         let input = &self.input;
         let full_output = self.egui_ctx.run_pass(raw_input, |ctx| {
-            app.logic(ctx, frame);
+            app.logic(ctx, board);
             ctx.root_ui(|ui| {
                 // The root Ui covers the whole screen; keep the app out of the safe-area insets
                 // (the on-screen keyboard). Always through this child Ui, so that widget ids
                 // don't change when the keyboard comes or goes.
                 let content = egui::UiBuilder::new().max_rect(ctx.content_rect());
-                ui.scope_builder(content, |ui| app.ui(ui, frame));
+                ui.scope_builder(content, |ui| app.ui(ui, board));
             });
             #[cfg(feature = "input-evdev")]
             if let Some(input) = input {
@@ -372,7 +372,7 @@ impl<P: Platform> Runner<'_, P> {
             false
         };
 
-        let mut close = std::mem::take(&mut self.frame.close_requested);
+        let mut close = std::mem::take(&mut self.board.close_requested);
         let mut repaint_delay = Duration::MAX;
         if input_changed {
             repaint_delay = Duration::ZERO;
@@ -396,7 +396,7 @@ impl<P: Platform> Runner<'_, P> {
             &primitives,
             &mut textures_delta,
         );
-        self.frame.cpu_usage = Some(frame_start.elapsed().as_secs_f32());
+        self.board.cpu_usage = Some(frame_start.elapsed().as_secs_f32());
 
         self.platform.present(self.renderer)?;
         Ok((repaint_delay, close))

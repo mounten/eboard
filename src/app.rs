@@ -14,12 +14,12 @@ use crate::{Error, Rotation};
 pub trait App {
     /// Build the UI. Called every time the screen is repainted, which only happens when something
     /// changed (input, animation, [`egui::Context::request_repaint`]).
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut Frame);
+    fn ui(&mut self, ui: &mut egui::Ui, board: &mut Board);
 
     /// Called before [`Self::ui`] each frame, for logic that does not need a [`egui::Ui`].
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut Frame) {}
+    fn logic(&mut self, _ctx: &egui::Context, _board: &mut Board) {}
 
-    /// Called once before the run loop exits (window close, [`Frame::close`], SIGINT/SIGTERM),
+    /// Called once before the run loop exits (window close, [`Board::close`], SIGINT/SIGTERM),
     /// after `save` (feature `persistence`). The display is still up and the GL context is
     /// current.
     fn on_exit(&mut self) {}
@@ -29,7 +29,7 @@ pub trait App {
     /// `persistence`). The file is only written if the stored state changed.
     ///
     /// The process may be killed or lose power without exiting, so anything that must not get
-    /// lost should be saved (and flushed with [`Frame::storage_mut`]) right away.
+    /// lost should be saved (and flushed with [`Board::storage_mut`]) right away.
     #[cfg(feature = "persistence")]
     fn save(&mut self, _storage: &mut dyn Storage) {}
 
@@ -84,8 +84,9 @@ pub struct ScreenInfo {
     pub renderer_info: String,
 }
 
-/// Information about the integration, passed to [`App`] every frame. Mirrors `eframe::Frame`.
-pub struct Frame {
+/// Handle to the board and the integration, passed to [`App`] every frame. Plays the role of
+/// `eframe::Frame`.
+pub struct Board {
     pub(crate) screen: ScreenInfo,
     pub(crate) close_requested: bool,
     pub(crate) cpu_usage: Option<f32>,
@@ -94,11 +95,11 @@ pub struct Frame {
     #[cfg(feature = "persistence")]
     pub(crate) storage: Option<Box<dyn Storage>>,
     pub(crate) backlight: Option<Backlight>,
-    /// Set by [`Frame::set_blank_after`], applied by the runner after the frame.
+    /// Set by [`Board::set_blank_after`], applied by the runner after the frame.
     pub(crate) blank_after_request: Option<Option<Duration>>,
 }
 
-impl Frame {
+impl Board {
     /// The output egui draws to.
     pub fn screen(&self) -> &ScreenInfo {
         &self.screen

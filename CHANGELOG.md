@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/mounten/eboard/compare/v0.2.1...v0.3.0) - 2026-10-23
+
+### Changed
+
+- [**breaking**] rename Frame to Board ([#20](https://github.com/mounten/eboard/pull/20))
+
+### Documentation
+
+- simplify README ([#22](https://github.com/mounten/eboard/pull/22))
+
 ## [0.2.1](https://github.com/mounten/eboard/compare/v0.2.0...v0.2.1) - 2026-10-21
 
 ### Added
